@@ -25,6 +25,7 @@ ENGINEERS: list[str] = [
 # Benchmark task factories: f(**options) -> list[Task]  (bench/tasks.py). Options: horizons.
 TASKS: list[str] = [
     "pitsense.bench.tasks:core_tasks",
+    "pitsense.bench.tyre:tyre_tasks",
 ]
 
 # Extra models for the core tasks (bench/tasks.py), scored next to the built-in ones.
@@ -36,6 +37,7 @@ TASK_MODELS: dict[str, list[str]] = {
 # Labelers: f(rows, final_state) -> None, adding y_* columns in place (bench/labels.py).
 LABELERS: list[str] = [
     "pitsense.bench.labels:pit_labels",
+    "pitsense.bench.tyre:tyre_labels",
 ]
 
 # CLI extensions: f(subparsers) -> None, adding `pitsense <command>` parsers (cli.py).
