@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pitsense"
+version = "0.1.0"
+description = "Leakage-safe F1 race-strategy engine: one code path for replay and live, plus an open benchmark."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Vedant Somani" }]
+dependencies = [
+  "requests>=2.31",
+  "numpy>=1.26",
+  "pandas>=2.2",  # groupby.apply(include_groups=...) in bench/evaluate.py
+  "scikit-learn>=1.4",
+  "pyarrow>=14",
+]
+
+[project.optional-dependencies]
+# FastF1 is only needed to record live sessions and to cross-check our reconstruction.
+live = ["fastf1>=3.8,<3.9"]
+dev = ["pytest>=8", "fastf1>=3.8,<3.9"]
+
+[project.scripts]
+pitsense = "pitsense.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "integration: needs downloaded race data (run `pitsense fetch` first); skipped otherwise",
+]

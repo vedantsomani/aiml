@@ -1,0 +1,96 @@
+{
+ "meta": {
+  "test_year": 2026,
+  "test_races": 15,
+  "races": 39,
+  "decision_points": 43123,
+  "feature_version": "v0.1"
+ },
+ "pit_within_1": [
+  {
+   "model": "gbm_hazard",
+   "n": 16177,
+   "positives": 498,
+   "log_loss": 0.11821671453565004,
+   "brier": 0.028149750350407517,
+   "auc": 0.7978590809439685,
+   "avg_precision": 0.13738312513546108,
+   "brier_skill": 0.05670678667838591
+  },
+  {
+   "model": "tyre_age_logit",
+   "n": 16177,
+   "positives": 498,
+   "log_loss": 0.1311471710369642,
+   "brier": 0.029417844626323512,
+   "auc": 0.6989181933422829,
+   "avg_precision": 0.07129941483515086,
+   "brier_skill": 0.014213169170825046
+  },
+  {
+   "model": "base_rate",
+   "n": 16177,
+   "positives": 498,
+   "log_loss": 0.13754995483055063,
+   "brier": 0.02984199393450943,
+   "auc": 0.48311429274723744,
+   "avg_precision": 0.028715216103445945,
+   "brier_skill": 0.0
+  }
+ ],
+ "pit_within_3": [
+  {
+   "model": "gbm_hazard",
+   "n": 16177,
+   "positives": 1507,
+   "log_loss": 0.2702733344037683,
+   "brier": 0.07583206679879491,
+   "auc": 0.7591557281651768,
+   "avg_precision": 0.29234523224446146,
+   "brier_skill": 0.10307579060260919
+  },
+  {
+   "model": "tyre_age_logit",
+   "n": 16177,
+   "positives": 1507,
+   "log_loss": 0.29359608953169847,
+   "brier": 0.0810058303934949,
+   "auc": 0.6966791645802886,
+   "avg_precision": 0.19656848208082606,
+   "brier_skill": 0.04188170718011908
+  },
+  {
+   "model": "base_rate",
+   "n": 16177,
+   "positives": 1507,
+   "log_loss": 0.31020650714313325,
+   "brier": 0.08454679448305179,
+   "auc": 0.4829778687868339,
+   "avg_precision": 0.08723934501866437,
+   "brier_skill": 0.0
+  }
+ ],
+ "position_after_stop": [
+  {
+   "model": "rejoin_gbm",
+   "n": 533,
+   "exact": 0.5384615384615384,
+   "within_1": 0.8630393996247655,
+   "mae": 0.7392120075046904
+  },
+  {
+   "model": "gap_minus_pitloss",
+   "n": 533,
+   "exact": 0.49906191369606,
+   "within_1": 0.7917448405253283,
+   "mae": 0.9924953095684803
+  },
+  {
+   "model": "no_change",
+   "n": 533,
+   "exact": 0.32645403377110693,
+   "within_1": 0.5196998123827392,
+   "mae": 1.9662288930581613
+  }
+ ]
+}
