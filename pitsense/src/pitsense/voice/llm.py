@@ -55,7 +55,8 @@ def _encode(tok, samples, max_len):
 
 
 def train_llm(out=None, base: str = BASE, n_samples: int = 30000, epochs: int = 1, lr: float = 2e-4, rank: int = 32,
-              tokens_per_batch: int = 12000, per_race: int = 1000, calls: int = 3, log=print, model=None, tok=None) -> Path:
+              tokens_per_batch: int = 4096,  # fits an 8 GB GPU (vocabulary logits dominate)
+              per_race: int = 1000, calls: int = 3, log=print, model=None, tok=None) -> Path:
     """LoRA fine-tune on the training split of the voice corpus (2025 races; 2026 stays held out)."""
     from peft import LoraConfig, get_peft_model
 
@@ -79,7 +80,11 @@ def train_llm(out=None, base: str = BASE, n_samples: int = 30000, epochs: int = 
     log(f"{base}: {len(seqs)} training sequences, mean {sum(len(s[0]) for s in seqs) / len(seqs):.0f} tokens ({time.time() - t0:.0f} s)")
     cfg = LoraConfig(r=rank, lora_alpha=2 * rank, lora_dropout=0.0, task_type="CAUSAL_LM",
                      target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"])
-    model = get_peft_model(model.to(dev), cfg)
+    model = model.to(dev)
+    if dev.type == "cuda":  # trade compute for memory: activations are recomputed in the backward pass
+        model.gradient_checkpointing_enable()
+        model.enable_input_require_grads()
+    model = get_peft_model(model, cfg)
     model.print_trainable_parameters()
     params = [p for p in model.parameters() if p.requires_grad]
     for p in params:
