@@ -19,10 +19,10 @@ __all__ = ["RulesEngineer", "RCBook", "parse", "RegRule", "rule_for"]
 
 class RulesEngineer(Engineer):
     name = "rules"
+    # Lean set, chosen on 2025 (docs/engineers/rules.md): the noisy counts add variance and no skill.
     features = (
-        "must_stop", "penalty_s_pending", "drive_through_pending", "stint_laps_left",
-        "under_investigation", "track_limits_deleted", "black_white_flag", "incidents_noted",
-        "pit_lane_open", "sc_ending", "n_sc", "rc_rain_risk",
+        "must_stop", "penalty_s_pending", "drive_through_pending", "stint_laps_left_f",
+        "sc_ending", "pit_lane_open",
     )
 
     def __init__(self, ctx, memory) -> None:
@@ -70,6 +70,7 @@ class RulesEngineer(Engineer):
             "n_sc": b.n_sc + b.n_vsc,
             "n_red": b.n_red,
             "rc_rain_risk": b.rain_risk,
+            "rain_risk_f": -1.0 if b.rain_risk is None else b.rain_risk,  # model input: -1 = no forecast yet
             "drs_enabled": b.drs_enabled,
             "low_grip": b.grip_low,
             "chequered": b.chequered_t is not None,
@@ -107,6 +108,7 @@ class RulesEngineer(Engineer):
         return {
             "must_stop": bool(need),
             "stint_laps_left": stint_left,
+            "stint_laps_left_f": 999 if stint_left is None else stint_left,  # model input: 999 = no limit
             "penalty_s_pending": b.time_pending_s(number),
             "drive_through_pending": b.drive_pending(number),
             "penalties_issued": b.issued[number],
