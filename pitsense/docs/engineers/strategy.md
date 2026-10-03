@@ -162,6 +162,39 @@ to 1.623). Next-stop on 2026 gets worse with the scale (bias -0.19 to +1.15, MAE
 2025 correction that 2026's shorter stints do not share. Call latency: 0.54 s per call (2025), 0.62 s (2026),
 five cars, models on; under 2 s.
 
+## PREPARE_BOX audit (2025 analysis, 2026 scored once)
+
+`strategy_calls` now records every `decide` input (`trace` in each race result) and `replay_calls` re-scores any
+rule over the trace without a replay, so thresholds are tuned on 2025 in seconds.
+
+PREPARE_BOX on 2025 (top 5, 245 evaluations): the next real stop is 0 / 1 / 2 laps away in 12 / 11 / 12 % of them,
+more than 3 laps away in 60 % (more than 8 laps in 27 %; 9 % have no later stop). P(stop within 3 laps) rises only
+weakly with `pit_prob_3` (0.36 below 0.2, 0.39 at 0.2-0.3, 0.44 at 0.3-0.5) and the plan offset
+(0 laps 0.39, 1-2 laps 0.55-0.71, few cases); under SC/VSC it fires almost never (3 cases). Only 13 % of PREPARE_BOX
+calls turn into BOX within 3 laps.
+
+Finding: thresholds cannot fix it without cutting recall. PREPARE_BOX supplies most of the recall (it is the ladder
+into BOX through `hold`), so every stricter setting lowers recall as fast as it raises precision (grid of 217 +
+240 settings: PREPARE precision 0.48 to 0.55 costs recall 0.36 to 0.28; 0.65-1.0 costs recall 0.16-0.07).
+Lowering `p3_box` to 0.35 doubled BOX-conversion on top-5 2025 but cost BOX precision on the full-field
+Azerbaijan replay (BOX 24/30 to 24/47), so it was not kept. Chosen: `p1_prep` 0.05 (new: PREPARE_BOX also needs
+P(stop this lap) >= 0.05, held at x0.7). `prep_near` (BOX conditions nearly met) is implemented, default off:
+it did not help at equal recall.
+
+| top 5, +-2 laps | BOX | PREPARE_BOX | STAY_OUT | recall | box+prep precision |
+|---|---|---|---|---|---|
+| 2025 before | 31/60 = 0.52 | 72/150 = 0.48 | 0.962 | 0.358 | 0.490 |
+| 2025 after | 30/59 = 0.51 | 69/141 = 0.49 | 0.966 | 0.349 | 0.495 |
+| 2026 before | 11/21 = 0.52 | 31/81 = 0.38 | 0.959 | 0.266 | 0.412 |
+| 2026 after | 11/20 = 0.55 | 31/80 = 0.39 | 0.959 | 0.266 | 0.420 |
+
+Azerbaijan 2026 pit-wall replay, all cars, `shadow-score --k 2` (before / after): BOX 24/30 / 24/30,
+PREPARE_BOX 12/49 / 12/45, box precision 0.456 / 0.480, STAY_OUT 0.964 / 0.964, recall 0.526 / 0.526.
+(2026 was also scored for a `p3_box` 0.35 variant that was rejected; it was not the final choice.)
+
+Conclusion: PREPARE_BOX is not trustworthy yet (about 0.25 on the full field, 0.4-0.5 on top 5). The pit-probability
+signal does not separate "stop in 1-2 laps" from "stop in 4-8 laps"; a better timing model is needed, not tighter gates.
+
 ## Speed
 
 Two focus cars on one snapshot: 0.6 s (288 futures, about 250 plans each) on this machine; per car 0.2 s once
