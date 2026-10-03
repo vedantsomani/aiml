@@ -207,17 +207,17 @@ def switch_episodes(final: RaceState, gap_laps: int = 8, min_cars: int = 3) -> l
 
 
 def paid_off_lap(final: RaceState, ep: dict, k_first: int = 3) -> int | None:
-    """First lap from which the earliest switchers are ahead of cars that stayed on the old tyre.
+    """First lap from which the earliest switchers are ahead of the field's typical progress.
 
-    For each of the first ``k_first`` switchers: time since the lap before its stop, minus the median of
-    the cars that stayed on the old class over the same laps. Positive = switching paid off (stop included).
+    For each of the first ``k_first`` switchers: time elapsed since the lap before its stop, against the
+    median of every other car over the same laps (their stops and tyres included). The switch has paid
+    off once the switchers' median is below the field's on two laps in a row, the stop included.
     """
     rec = {(x.driver, x.lap): x for x in final.laps}
-    cls = {k: _compound_class(x.compound) for k, x in rec.items()}
-    old = "dry" if ep["direction"] == "to_inters" else "wet"
+    drivers = sorted({d for d, _ in rec})
     G = ep["events"][:k_first]
+    gset = {g[2] for g in G}
     last = max(x.lap for x in final.laps)
-    start = max(g[0] for g in G) + 1
     gains: dict[int, list[float]] = {}
     for in_lap, _, drv in G:
         p = in_lap - 1
@@ -227,14 +227,11 @@ def paid_off_lap(final: RaceState, ep: dict, k_first: int = 3) -> int | None:
             if (drv, L) not in rec:
                 break
             mine = rec[(drv, L)].t_end - rec[(drv, p)].t_end
-            ref = []
-            for other in {d for d, _ in rec}:
-                if other == drv or any(other == g[2] for g in ep["events"]):
-                    continue
-                if all(cls.get((other, m)) == old for m in range(p, L + 1)) and (other, L) in rec and (other, p) in rec:
-                    ref.append(rec[(other, L)].t_end - rec[(other, p)].t_end)
-            if len(ref) >= 3:
+            ref = [rec[(o, L)].t_end - rec[(o, p)].t_end for o in drivers
+                   if o not in gset and (o, p) in rec and (o, L) in rec]
+            if len(ref) >= 5:
                 gains.setdefault(L, []).append(median(ref) - mine)
+    start = max(g[0] for g in G) + 1
     prev = False
     for L in sorted(gains):
         if L < start or len(gains[L]) < len(G):
@@ -244,6 +241,22 @@ def paid_off_lap(final: RaceState, ep: dict, k_first: int = 3) -> int | None:
             return L - 1
         prev = ok
     return None
+
+
+def _call_runs(d: pd.DataFrame, direction: str) -> list[tuple[float, float]]:
+    """Time spans (first row, last row) during which the engineer's call was ``direction``."""
+    t = d.drop_duplicates("t").sort_values("t")
+    runs, start, prev = [], None, None
+    for tt, c in zip(t.t, t["weather__crossover"]):
+        if c == direction and start is None:
+            start = tt
+        elif c != direction and start is not None:
+            runs.append((start, prev))
+            start = None
+        prev = tt
+    if start is not None:
+        runs.append((start, prev))
+    return runs
 
 
 def crossover_table(df: pd.DataFrame, race_ids: list[str]) -> pd.DataFrame:
@@ -259,16 +272,26 @@ def crossover_table(df: pd.DataFrame, race_ids: list[str]) -> pd.DataFrame:
         for ep in switch_episodes(final):
             ev = ep["events"]
             first_t = ev[0][1]
-            hit = d[(d["weather__crossover"] == ep["direction"]) & (d.t >= first_t)]
-            call_t = float(hit.t.min()) if len(hit) else None
+            # the engineer's call that is up around the switching: it may start before the first
+            # switcher (cars that began on the other tyre) or after it
+            last_t = ev[-1][1]
+            runs = [r for r in _call_runs(d, ep["direction"]) if r[1] >= first_t - 600 and r[0] <= last_t + 600]
+            call_t = float(runs[0][0]) if runs else None
             med_lap = float(median([e[0] for e in ev]))
             call_lap = _lead_lap(final, call_t) if call_t is not None else None
+            other = "to_slicks" if ep["direction"] == "to_inters" else "to_inters"
+            oruns = [r for r in _call_runs(d, other) if r[1] >= first_t - 600 and r[0] <= last_t + 600]
+            opp_lap = _lead_lap(final, oruns[0][0]) if oruns else None
             po = paid_off_lap(final, ep)
             out.append({"race": rid, "direction": ep["direction"], "switchers": len(ev), "first_switch_lap": ev[0][0],
-                        "call_lap": call_lap, "paid_off_lap": po, "median_switch_lap": med_lap,
+                        "call_lap": call_lap, "opposite_call_lap": opp_lap, "paid_off_lap": po, "median_switch_lap": med_lap,
                         "call_minus_first": None if call_lap is None else call_lap - ev[0][0],
                         "median_minus_call": None if call_lap is None else med_lap - call_lap})
-    return pd.DataFrame(out)
+    t = pd.DataFrame(out)
+    for c in ("call_lap", "opposite_call_lap", "paid_off_lap", "call_minus_first", "median_minus_call"):
+        if c in t:
+            t[c] = pd.to_numeric(t[c], errors="coerce")
+    return t
 
 
 def false_calls(df: pd.DataFrame) -> pd.DataFrame:

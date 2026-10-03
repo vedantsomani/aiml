@@ -41,9 +41,10 @@ MIN_TRAIN_POSITIVES = 40
 ALERT_PROB = 0.35  # rain-onset alert threshold (dry now)
 
 # crossover
-WINDOW_LAPS = 5  # laps looked back
-CROSS_MARGIN_S = 0.7  # the faster tyre must be at least this much faster (median of the recent shared laps)
-CROSS_MIN_LAPS = 2  # shared laps needed (both groups on track, clean laps)
+WINDOW_LAPS = 4  # laps looked back
+CROSS_MARGIN_S = 0.5  # the faster tyre must be at least this much faster (mean of the last two shared laps)
+CROSS_MIN_LAPS = 2  # shared laps needed (both groups on track, clean laps) ...
+CROSS_ONE_LAP_S = 1.5  # ... or one shared lap that differs by at least this much
 CROSS_HOLD_LAPS = 8  # keep the call this long after the evidence disappears
 RACING = 1.25  # clean lap slower than this times the stint reference is dropped (neutralised)
 
@@ -119,9 +120,10 @@ def design(f: dict[str, float], prior_logit: float) -> list[float]:
     run = min(f["run_min"], RUN_CAP_MIN) / RUN_CAP_MIN
     since = f["since_rain_min"]
     recent = math.exp(-since / 20.0) if since >= 0 else 0.0
-    risk = f["rc_risk"]
+    # The FIA risk figure is deliberately not an input: fed in as published it made held-out log loss
+    # worse on both 2025 and 2026 (docs/engineers/weather.md). It is still exposed as rc_rain_risk_f.
     return [
-        now, now * run, (1 - now) * recent, (1 - now) * f["rain_seen"], risk, risk * (1 - now), f["rc_known"],
+        now, now * run, (1 - now) * recent, (1 - now) * f["rain_seen"],
         f["hum_tr"] / 5.0, f["trk_tr"] / 5.0, f["air_tr"] / 3.0, f["hum"], prior_logit,
     ]
 
@@ -185,8 +187,10 @@ def _compound_class(c: str | None) -> str | None:
 class WeatherEngineer(Engineer):
     name = "weather"
     requires = ("rules",)
-    # race-level model inputs; sentinels (0 / -1), never None
-    features = ("rain_prob_10min", "rain_now", "crossover_f", "inters_vs_slicks_f")
+    # Declaring them (rain_prob_10min, rain_now, crossover_f, inters_vs_slicks_f; sentinels, never None)
+    # made the core pit_within / rejoin models marginally worse, so none are declared: the columns
+    # are in every row and the rain_10min task's models read them directly.
+    features = ()
 
     @classmethod
     def summarize_race(cls, final, meta):
@@ -311,8 +315,8 @@ class WeatherEngineer(Engineer):
             if g["wet"] and g["dry"]:
                 deltas.append((lap, median(g["wet"]) - median(g["dry"])))
         c = self._cross
-        if len(deltas) >= CROSS_MIN_LAPS:
-            d = median([x for _, x in deltas])
+        if len(deltas) >= CROSS_MIN_LAPS or (deltas and abs(deltas[-1][1]) >= CROSS_ONE_LAP_S):
+            d = mean([x for _, x in deltas[-2:]])
             c["delta"], c["seen_lap"] = d, cur
             call = "to_inters" if d <= -CROSS_MARGIN_S else "to_slicks" if d >= CROSS_MARGIN_S else "none"
             if call != "none" and call != c["call"]:
