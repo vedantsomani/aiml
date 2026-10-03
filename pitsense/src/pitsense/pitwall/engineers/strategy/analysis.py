@@ -28,13 +28,18 @@ SETTINGS = {
     "S1": 96,  # futures used to screen the candidate plans
     "S_B": 160,  # futures in the safety-car scenario
     "keep": 14,  # plans re-evaluated on all futures
-    "tol_box": 0.10,  # box now if it costs at most this many places versus the best plan
-    "tol_prep": 0.12,
+    "tol_box": 0.30,  # box now if it costs at most this many places versus the best plan
+    "tol_prep": 0.50,
     "prep_laps": 2,  # plan's first stop within this many laps -> PREPARE_BOX
     "gain_sc": 0.6,  # places gained by stopping under a safety car to call BOX_IF_SC
     "p_sc": 0.7,  # share of surprise neutralisations that are full safety cars
     "w_time": 0.001,  # places per second of race time: breaks ties between plans with equal expected position
     "lam_prior": 0.02,  # places per lap between a plan's first stop and the typical stop timing (rivals' pit probabilities)
+    "use_hazard": True,  # head: time box calls with the pit probabilities (False: the plan alone, as before)
+    "p1_box": 0.25,  # BOX needs a stop probability this lap of at least this ...
+    "p3_box": 0.50,  # ... or within 3 laps of at least this
+    "p3_prep": 0.20,  # PREPARE_BOX needs a stop probability within 3 laps of at least this
+    "hold": 0.7,  # a box call made last lap is held down to this share of the thresholds
     "tol_keep": 0.05,  # keep last lap's target stop lap unless the best plan is better by more than this
 }
 OFFS1 = (0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 17, 20, 24, 28, 33, 38, 44, 50, 58)
@@ -98,6 +103,8 @@ class CarAnalysis:
     gain_sc: float | None = None  # places gained by stopping under an SC vs staying on plan A, given one soon
     sc_prob5: float = 0.0
     sc_best_comp: str | None = None
+    pp: tuple | None = None  # the car's pit probabilities within 1 / 3 / 5 laps as the simulator was given them
+    stop_p: tuple = ()  # share of simulated futures (default strategy) with the first stop at offset 0..11 laps from the next lap
     ms: float = 0.0
     n_sims: int = 0
     n_plans: int = 0
@@ -340,6 +347,9 @@ def analyse_focus(F: FieldIn, info: dict, run: FieldRun, D: Draws, number: str, 
     out = CarAnalysis(number, True, anchor=A, total=F.total)
     plans = candidates(F, c, info, number)
     out.n_plans = len(plans)
+    out.pp = tuple(float(x) for x in F.pp[c])
+    s0 = run.stop[:, c, 0] - (A + 1)
+    out.stop_p = tuple(float(np.mean(s0 == o)) for o in range(12))
     if not plans:
         out.ok, out.why = False, "no legal plan"
         return out

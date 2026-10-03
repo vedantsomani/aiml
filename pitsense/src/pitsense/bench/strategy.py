@@ -69,9 +69,25 @@ def _rivals_next(rv: dict, A: int, stint_age: float) -> float:
     return A + max(6.0, typ - stint_age)
 
 
+def bundle_for_year(year: int):
+    """The cross-race models a pit wall would have at the start of ``year``: trained on every race that ended
+    before the year's first race (cached in ``data/models``), so no test race is seen by its own model."""
+    from .. import modelstore
+    from .dataset import load_bench
+
+    first = min(r.start_utc for r in downloaded_sessions() if r.year == year and r.session_name == "Race")
+    path = data_dir() / "models" / f"strategy_bench_{year}.pkl"
+    if path.exists():
+        return modelstore.load_bundle(path, first)
+    bundle = modelstore.train_bundle(load_bench(), first, holdout=0)
+    modelstore.save_bundle(bundle, path)
+    return bundle
+
+
 def run_race(args) -> dict:
     """Replay one race: forecasts at the anchors, head calls for the top-5 finishers."""
-    slug, year, stride, S, calls_on = args
+    slug, year, stride, S, calls_on = args[:5]
+    use_models = bool(args[5]) if len(args) > 5 else False
     ref = next(r for r in downloaded_sessions() if r.slug == slug)
     from . import history as H
 
@@ -86,7 +102,8 @@ def run_race(args) -> dict:
     y_pos = {d.number: d.position for d in classified}
     top5 = tuple(d.number for d in classified[:5])
     ctx = Context.for_race(prior, ref.to_dict(), history=hist, race_start_utc=ref.start_utc,
-                           team=TeamConfig(cars=top5 if calls_on else ()))
+                           team=TeamConfig(cars=top5 if calls_on else ()),
+                           models=bundle_for_year(year) if use_models else None)
     wall = PitWall(ctx)
     state = RaceState(log.meta)
     stops: dict[str, list[int]] = {}
@@ -168,11 +185,14 @@ def _races(year: int):
     return [r for r in downloaded_sessions() if r.year == year and r.session_name == "Race"]
 
 
-def collect(year: int, *, jobs: int = 3, stride: int = 2, S: int = 192, calls_on: bool = True, refresh: bool = False) -> list[dict]:
-    cache = data_dir() / "scratch" / f"strategy_{year}_{stride}_{S}_{int(calls_on)}.pkl"
+def collect(year: int, *, jobs: int = 3, stride: int = 2, S: int = 192, calls_on: bool = True, refresh: bool = False,
+            models: bool = True) -> list[dict]:
+    cache = data_dir() / "scratch" / f"strategy_{year}_{stride}_{S}_{int(calls_on)}{'_m' if models else ''}.pkl"
     if cache.exists() and not refresh:
         return pickle.loads(cache.read_bytes())
-    jobs_ = [(r.slug, year, stride, S, calls_on) for r in _races(year)]
+    if models:
+        bundle_for_year(year)  # train once here, not in every worker
+    jobs_ = [(r.slug, year, stride, S, calls_on, models) for r in _races(year)]
     with ProcessPoolExecutor(max_workers=jobs) as ex:
         out = list(ex.map(run_race, jobs_))
     cache.parent.mkdir(parents=True, exist_ok=True)

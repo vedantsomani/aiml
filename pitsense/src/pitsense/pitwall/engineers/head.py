@@ -39,8 +39,22 @@ def pick_plan(a, prev_target: int | None):
     return best
 
 
-def decide(a, prev_target: int | None, *, pit_open: bool = True, sc_phase: str = "none"):
-    """(action, compound, confidence, rule, plan A) for one car's analysis and last lap's target stop lap."""
+def _gap(a, A, lo: int, hi: int) -> float | None:
+    """Places lost by stopping within offsets lo..hi laps from now instead of following plan A (None: no such plan)."""
+    u = [r.util for r in a.ranked if r.stops and r.first_offset is not None and lo <= r.first_offset <= hi]
+    return min(u) - A.util if u else None
+
+
+def decide(a, prev_target: int | None, *, pit_open: bool = True, sc_phase: str = "none", prev_call: str | None = None):
+    """(action, compound, confidence, rule, plan A) for one car's analysis and last lap's target stop lap.
+
+    The plan says where a stop is worth most; the pit-probability model (``a.pp``, the models bundle's
+    ``pit_prob_1/3`` or the rivals' hazard) says when the team will really stop. A box call needs both:
+    BOX: stopping this lap costs at most ``tol_box`` places against plan A *and* the stop is likely now
+    (``p1_box`` within this lap or ``p3_box`` within 3 laps). PREPARE_BOX: stopping within ``prep_laps`` laps costs
+    at most ``tol_prep`` and a stop within 3 laps has probability ``p3_prep``. A call already made last lap is
+    held down to ``hold`` x those thresholds. Without pit probabilities the plan alone decides (as before).
+    """
     S = SETTINGS
     if a.plan_a is None or not a.ranked:
         return "NO_CALL", None, 0.0, "no_plan", None
@@ -50,12 +64,24 @@ def decide(a, prev_target: int | None, *, pit_open: bool = True, sc_phase: str =
     if not A.stops:
         return "STAY_OUT", None, min(0.97, max(0.5, _phi(d / se))), "no_stop_needed", A
     comp = A.stops[0][1]
-    if A.first_offset == 0:
-        if not pit_open:
-            return "PREPARE_BOX", comp, 0.6, "pit_lane_closed", A
-        return "BOX", comp, min(0.97, max(0.5, _phi(-d / se))), "box_now", A
-    if A.first_offset <= S["prep_laps"]:
-        return "PREPARE_BOX", comp, min(0.95, max(0.5, _phi(d / se))), "stop_soon", A
+    pp = getattr(a, "pp", None)
+    if pp is None or not S["use_hazard"]:
+        if A.first_offset == 0:
+            if not pit_open:
+                return "PREPARE_BOX", comp, 0.6, "pit_lane_closed", A
+            return "BOX", comp, min(0.97, max(0.5, _phi(-d / se))), "box_now", A
+        if A.first_offset <= S["prep_laps"]:
+            return "PREPARE_BOX", comp, min(0.95, max(0.5, _phi(d / se))), "stop_soon", A
+    else:
+        h = S["hold"] if prev_call in ("BOX", "PREPARE_BOX") else 1.0  # thresholds are lower for a call already made
+        p1, p3 = pp[0], max(pp[0], pp[1])
+        g_now, g_win = _gap(a, A, 0, 0), _gap(a, A, 0, S["prep_laps"])
+        if g_now is not None and g_now <= S["tol_box"] / h and (p1 >= S["p1_box"] * h or p3 >= S["p3_box"] * h):
+            if not pit_open:
+                return "PREPARE_BOX", comp, 0.6, "pit_lane_closed", A
+            return "BOX", comp, min(0.97, max(0.5, _phi(-d / se))), "box_now", A
+        if g_win is not None and g_win <= S["tol_prep"] / h and p3 >= S["p3_prep"] * h:
+            return "PREPARE_BOX", comp, min(0.95, max(0.5, _phi(d / se))), "stop_soon", A
     if a.gain_sc is not None and a.gain_sc >= S["gain_sc"] and sc_phase == "none":
         return "BOX_IF_SC", a.sc_best_comp, min(0.9, 0.5 + 0.2 * a.gain_sc), "sc_gain", A
     return "STAY_OUT", None, min(0.97, max(0.5, _phi(d / se))), "stay", A
@@ -69,6 +95,7 @@ class HeadOfStrategy(Engineer):
     def __init__(self, ctx, memory) -> None:
         super().__init__(ctx, memory)
         self._hist: dict[str, tuple[int, int | None, int | None]] = {}  # car -> (lap, target stop lap, target before)
+        self._last: dict[str, str] = {}  # car -> last call's action
 
     def calls(self, state, view):
         cars = [n for n in focus_cars(self.ctx, state) if state.drivers.get(n) is not None and state.drivers[n].running]
@@ -87,7 +114,8 @@ class HeadOfStrategy(Engineer):
             lap0, tgt0, before = self._hist.get(n, (None, None, None))
             prev_target = before if lap0 == d.laps else tgt0  # target stop lap decided on the previous lap
             action, comp, conf, rule, chosen = decide(a, prev_target, pit_open=rules.get("pit_lane_open") is not False,
-                                                      sc_phase=str(rules.get("sc_phase") or "none"))
+                                                      sc_phase=str(rules.get("sc_phase") or "none"), prev_call=self._last.get(n))
+            self._last[n] = action
             target = chosen.stops[0][0] if chosen is not None and chosen.stops else None
             self._hist[n] = (d.laps, target, before if lap0 == d.laps else tgt0)
             if chosen is None:

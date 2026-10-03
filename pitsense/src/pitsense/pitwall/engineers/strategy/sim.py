@@ -46,6 +46,7 @@ PARAMS = {
     "vsc_pull": 0.30,
     "sc_pull_window": 14,
     "stop_extra_s": 6.0,  # s added to every stop: traffic on rejoining, cold-tyre laps
+    "stint_scale": 1.12,  # stints drawn from past races are stretched by this factor (opponents' later stops)
     "hold_gain": 1.0,  # most a defending car can gain (s) per lap by holding a rival off
 }
 
@@ -268,7 +269,7 @@ def sample_schedules(F: FieldIn, D: Draws):
     cur_c = np.broadcast_to(F.comp0[None, :], (S, C))
     ml = np.broadcast_to(F.stint_age[None, :] + 6.0, (S, C))
     length = _empirical(F, cur_c, ml, D.u_after[:, :, 0], D.u_open[:, :, 0])
-    later = np.where(length >= NOSTOP, NOSTOP, A + (length - F.stint_age[None, :]).astype(np.int64))
+    later = np.where(length >= NOSTOP, NOSTOP, A + (length * PARAMS["stint_scale"] - F.stint_age[None, :]).astype(np.int64))
     s0 = np.where(beyond, later, first_in)
     # safety car / VSC: cars due to stop soon come in
     l0 = D.sc_start  # [S] first SC/VSC lap index (R if none)
