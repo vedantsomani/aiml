@@ -56,6 +56,7 @@ COMMANDS: list[str] = [
     "pitsense.modelstore:add_commands",
     "pitsense.pitwall.runtime:add_commands",
     "pitsense.bench.weather:add_commands",
+    "pitsense.bench.strategy:add_commands",
 ]
 
 

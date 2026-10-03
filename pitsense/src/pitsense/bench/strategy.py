@@ -245,3 +245,54 @@ def strategy_tasks(**_) -> list[Task]:
         return Task(name, "regression", "y", lambda d: d, (), evaluate=lambda df, *, test_year, min_train_races, _f=fn: _f(df, test_year, min_train_races))
 
     return [mk("strategy_finish", _finish), mk("strategy_nextstop", _nextstop), mk("strategy_calls", _calls)]
+
+
+# --------------------------------------------------------------------------- leak test
+def leakcheck(year: int, race: str, cuts: int = 3, seed: int = 0, cars: tuple = ()) -> list[dict]:
+    """Plans and calls at time t must be identical built from the full log and from ``log.until(t)``.
+
+    The full-log pit wall is fed the whole log but asked at t (every event up to t applied, none after);
+    the other one is fed ``log.until(t)`` only. Both are asked once, at t.
+    """
+    from .. import archive
+    from . import history as H
+    from .leakcheck import random_cuts
+
+    ref = archive.find_session(year, race)
+    log = load_archive_session(ref.local_dir)
+    hist = H.load(bench_dir() / "history.json")
+    prior = H.prior_for(hist, ref.circuit_key, ref.start_utc)
+    out = []
+    for cut in random_cuts(log, cuts, seed):
+        sides = []
+        for source in (log, log.until(cut)):
+            top = tuple(cars) or ("1", "16") 
+            ctx = Context.for_race(prior, ref.to_dict(), history=hist, race_start_utc=ref.start_utc, team=TeamConfig(cars=top))
+            wall, state = PitWall(ctx), RaceState(source.meta)
+            for e in source.events:
+                if e.t > cut:
+                    break
+                state.apply(e)
+                wall.observe(state)
+            sides.append([(c.car, c.action, c.compound, c.confidence, c.plan_a, c.plan_b, c.reasons) for c in wall.calls(state)])
+        out.append({"cut": cut, "calls": len(sides[0]), "same": sides[0] == sides[1]})
+    return out
+
+
+def _cmd_leak(a) -> None:
+    import sys
+
+    res = leakcheck(a.year, a.race, a.cuts, a.seed, tuple(a.cars or ()))
+    for r in res:
+        print(("PASS" if r["same"] and r["calls"] else "FAIL"), f"cut t={r['cut']:8.1f}s  calls compared {r['calls']}")
+    sys.exit(0 if all(r["same"] and r["calls"] for r in res) else 1)
+
+
+def add_commands(sub) -> None:
+    s = sub.add_parser("strategy-leakcheck", help="plans and calls at t: full log vs log.until(t)")
+    s.add_argument("--year", type=int, default=2026)
+    s.add_argument("--race", required=True)
+    s.add_argument("--cuts", type=int, default=3)
+    s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--cars", nargs="+")
+    s.set_defaults(fn=_cmd_leak)

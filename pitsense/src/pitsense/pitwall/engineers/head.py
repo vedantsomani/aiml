@@ -95,7 +95,7 @@ class HeadOfStrategy(Engineer):
                 continue
             reasons = self._reasons(n, a, chosen, action, rule, view, rules, weather, state)
             rain = weather.get("rain_prob_10min")
-            if isinstance(rain, (int, float)) and rain >= 0.4 or weather.get("crossover") not in (None, "none"):
+            if (isinstance(rain, (int, float)) and rain >= 0.4) or weather.get("rain_now") or weather.get("crossover") not in (None, "none"):
                 conf *= 0.8
             if d.laps < 8:
                 conf *= 0.85
@@ -151,6 +151,8 @@ class HeadOfStrategy(Engineer):
             r.append(Reason("rejoin", f"boxing now rejoins P{rj}", rj))
         r.append(Reason("expected_finish", f"Plan A: {plan_text(A.stops)}; expected P{A.exp_pos:.1f}, {A.exp_pts:.1f} points", round(A.exp_pos, 2)))
         rain = weather.get("rain_prob_10min")
-        if isinstance(rain, (int, float)) and rain >= 0.4:
+        if weather.get("rain_now"):
+            r.append(Reason("rain_now", "rain is falling: dry-tyre plans may not hold", True))
+        elif isinstance(rain, (int, float)) and rain >= 0.4:
             r.append(Reason("rain_risk", f"{rain:.0%} chance of rain within 10 minutes: dry-tyre plans may not hold", rain))
         return r

@@ -34,6 +34,7 @@ SETTINGS = {
     "gain_sc": 0.6,  # places gained by stopping under a safety car to call BOX_IF_SC
     "p_sc": 0.7,  # share of surprise neutralisations that are full safety cars
     "w_time": 0.001,  # places per second of race time: breaks ties between plans with equal expected position
+    "lam_prior": 0.0,  # places per lap between a plan's first stop and the typical stop timing (rivals' pit probabilities)
     "tol_keep": 0.05,  # keep last lap's target stop lap unless the best plan is better by more than this
 }
 OFFS1 = (0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 17, 20, 24, 28, 33, 38, 44, 50, 58)
@@ -304,8 +305,30 @@ def _points(pos: np.ndarray) -> np.ndarray:
     return np.concatenate([POINTS, [0.0]])[idx]
 
 
-def _result(plan: tuple, pos: np.ndarray, time: np.ndarray, soft: np.ndarray, A: int, tref: float) -> PlanResult:
-    u = soft + SETTINGS["w_time"] * (time - tref)
+def prior_offset(F: FieldIn, c: int) -> float:
+    """Typical laps until this car's next stop from the stop probabilities (as the rivals' hazard reads them)."""
+    p1, p3, p5 = F.pp[c]
+    if p1 >= 0.5:
+        return 0.0
+    if p3 >= 0.5:
+        return 2 * (0.5 - p1) / max(p3 - p1, 1e-6)
+    if p5 >= 0.5:
+        return 2 + 2 * (0.5 - p3) / max(p5 - p3, 1e-6)
+    return max(5.0, F.life[F.comp0[c]] - F.stint_age[c] - 1)
+
+
+def _prior_pen(F: FieldIn, c: int, plan: tuple) -> float:
+    lam = SETTINGS["lam_prior"]
+    if not lam:
+        return 0.0
+    o = prior_offset(F, c)
+    if plan:
+        return lam * min(15.0, abs(plan[0][0] - (F.A + 1) - o))
+    return lam * min(15.0, max(0.0, F.R - o))
+
+
+def _result(plan: tuple, pos: np.ndarray, time: np.ndarray, soft: np.ndarray, A: int, tref: float, pen: float = 0.0) -> PlanResult:
+    u = soft + SETTINGS["w_time"] * (time - tref) + pen
     return PlanResult(tuple((int(l), DRY[cj]) for l, cj in plan), float(pos.mean()), float(_points(pos).mean()),
                       float(pos.std()), (plan[0][0] - (A + 1)) if plan else None, pos, float(u.mean()), u)
 
@@ -323,7 +346,7 @@ def analyse_focus(F: FieldIn, info: dict, run: FieldRun, D: Draws, number: str, 
     S1 = min(S1, D.S)
     stop, comp = _arrays(plans, S1)
     pos1, time1, soft1 = evaluate_plans(F, D, run, c, stop, comp, S1)
-    means = (soft1 + SETTINGS["w_time"] * (time1 - time1.mean())).mean(1)
+    means = (soft1 + SETTINGS["w_time"] * (time1 - time1.mean())).mean(1) + np.array([_prior_pen(F, c, p) for p in plans])
     order = np.argsort(means, kind="stable")
     chosen = list(order[:keep])
     first = np.array([p[0][0] - (A + 1) if p else -1 for p in plans])
@@ -343,7 +366,7 @@ def analyse_focus(F: FieldIn, info: dict, run: FieldRun, D: Draws, number: str, 
     stop, comp = _arrays(sub, D.S)
     pos, time, soft = evaluate_plans(F, D, run, c, stop, comp, D.S)
     tref = float(time.mean())
-    res = [_result(p, pos[i], time[i], soft[i], A, tref) for i, p in enumerate(sub)]
+    res = [_result(p, pos[i], time[i], soft[i], A, tref, _prior_pen(F, c, p)) for i, p in enumerate(sub)]
     out.ranked = sorted(res, key=lambda r: (r.util, r.exp_pos))
     out.plan_a = out.ranked[0]
     now = [r for r in out.ranked if r.first_offset == 0]
@@ -406,7 +429,7 @@ def analyse(state, view, ctx, memory, cars: list[str], *, S: int | None = None, 
     S = S or (96 if light else st["S"])
     S1 = min(st["S1"], S)
     out: dict[str, CarAnalysis] = {}
-    wet = not bool(view.race("rules").get("race_dry", True))
+    wet = not bool(view.race("rules").get("race_dry", True)) or bool(view.race("weather").get("wet_running"))
     by_anchor: dict[int, list[str]] = {}
     for n in cars:
         d = state.drivers.get(n)
