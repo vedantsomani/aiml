@@ -120,7 +120,7 @@ Root causes found on 2025 (24 races, top-5 cars, every second lap):
 * The bench replayed without the models bundle, so the simulator and head used the rivals' hazard only.
 * Opponents' later stops ran early on 2025 (next-stop bias -1.8 laps with a correct history; -2.9 in the old
   table was measured with a stale `history.json`, see Open issues).
-* About 60 % of the real stops are made under SC/VSC or in wet races; calls cannot see a safety car that
+* About 35 % of the 2025 top-5 stops (76 of 218) are made under SC/VSC, and wet races give NO_CALL; calls cannot see a safety car that
   arrives during the in-lap (recall under SC 0.15).
 
 Fixes (all in `SETTINGS` / `sim.PARAMS`):
