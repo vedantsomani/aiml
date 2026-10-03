@@ -21,7 +21,7 @@ pitsense pitwall --live --team ferrari                                  # live r
 
 How a team uses it from day one: [docs/pitwall.md](docs/pitwall.md). How it is built, and the rules every engineer follows: [docs/ENGINEERING.md](docs/ENGINEERING.md).
 
-**Honest status.** Every number below is a backtest on the 2026 races, each scored with models trained only on races that finished before it. The live recorder has not yet been run against a real session, and box-call timing is still the weakest part. Run it in shadow mode (`pitsense shadow-score`) before trusting it.
+**Honest status.** Every number below is a backtest on the 2026 races, each scored with models trained only on races that finished before it. The live recorder has not yet been run against a real session, and box-call timing (precision 0.41) is still the weakest part. Run it in shadow mode (`pitsense shadow-score`) before trusting it.
 
 ---
 
@@ -156,7 +156,7 @@ Full per-race output: `reports/validation.txt`.
 | Undercut by the car behind within 5 laps | `undercut_gbm` | AUC 0.84 | 0.78 (gap rule) |
 | Rain within 10 minutes | nowcast | log loss 0.079 | 0.186 (base rate); only 3 wet races in 2026 |
 | Finishing position at 25/50/75% distance | race simulator | RPS 0.050 | 0.072 (current position) |
-| Box calls within ±2 laps (top 5) | head of strategy | precision 0.28, recall 0.24 | weak; being improved |
+| Box calls within ±2 laps (top 5) | head of strategy | precision 0.41, recall 0.27 | 0.28 / 0.24 (plan-only rule) |
 
 Every engineer value goes into the benchmark rows, so the corrupted-future check (`pitsense leakcheck`) covers all of them. The simulator and calls have their own check (`pitsense strategy-leakcheck`). Full tables are in each engineer's doc.
 
@@ -167,7 +167,7 @@ Implement `fit(train_df, target)` and `predict(test_df)` (see `src/pitsense/benc
 ## Known limitations
 
 - **Live is untested.** The recorder and `pitsense pitwall --live` have not been run against a real session.
-- **Box-call timing is weak:** precision 0.28. Plans and finishing-order forecasts are better than the calls built on them.
+- **Box-call timing is still the weakest part:** precision 0.41, recall 0.27. About half of BOX calls see no stop within 2 laps, and most stops under a safety car can't be foreseen a lap ahead.
 - **Wet races get no strategy call.** There is no intermediate or wet tyre model; only 3 wet races in 2026.
 - **Public timing only:** no fuel loads, tyre temperatures or car telemetry. PitSense is strongest on rivals, whom teams also see only through timing.
 - **Voice is unfinished.** The fine-tuned SmolLM2 voice and spoken audio are built but not yet trained: run `pitsense voice train --backend llm`.
