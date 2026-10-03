@@ -16,7 +16,7 @@ from pathlib import Path
 
 from ..config import data_dir
 
-DEFAULT_VOICE = "en_US-lessac-medium"
+DEFAULT_VOICE = os.environ.get("PITSENSE_TTS_VOICE", "en_GB-alan-medium")  # British race-engineer voice
 _CACHE: dict = {}
 
 

@@ -6,6 +6,7 @@
     GET /api/alerts        {"active": [...], "log": [...]}
     GET /api/health        loop status, throughput, snapshot latency, model bundle
     GET /api/stream        server-sent events: "snapshot" (the snapshot JSON), "status"
+    GET /api/radio.wav     ?car=N: that car's latest radio message, spoken (Piper TTS; 404 if not installed)
 
 Read-only: no endpoint changes anything. Binds to 127.0.0.1 unless told otherwise.
 """
@@ -43,6 +44,23 @@ def _handler(rt):
         def _json(self, obj, code: int = 200) -> None:
             self._send(json.dumps(obj, separators=(",", ":"), default=str).encode(), "application/json", code)
 
+        def _radio(self) -> None:
+            from urllib.parse import parse_qs
+
+            car = (parse_qs(self.path.partition("?")[2]).get("car") or [""])[0]
+            msg = getattr(rt, "radio", {}).get(car)
+            if not msg:
+                return self._json({"error": "no radio message for this car"}, 404)
+            try:
+                from ..voice import tts
+
+                if not tts.available():
+                    return self._json({"error": "speech not installed: pip install -e .[tts]"}, 404)
+                wav = tts.speak(msg["text"])  # cached per text
+            except Exception as exc:
+                return self._json({"error": f"speech failed: {exc}"}, 500)
+            self._send(wav.read_bytes(), "audio/wav")
+
         def do_GET(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
             try:
@@ -59,6 +77,8 @@ def _handler(rt):
                     self._json(rt.health())
                 elif path == "/api/stream":
                     self._stream()
+                elif path == "/api/radio.wav":
+                    self._radio()
                 else:
                     self._json({"error": "not found"}, 404)
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):

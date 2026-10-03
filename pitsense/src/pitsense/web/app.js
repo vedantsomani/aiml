@@ -111,11 +111,29 @@ function speakRadio(s, cars) {
     if (!r || spoken[n] === r.text) continue;
     const first = spoken[n] === undefined;
     spoken[n] = r.text;
-    if (first || !radioOn || !window.speechSynthesis) continue;  // don't read out the backlog on connect
-    const u = new SpeechSynthesisUtterance(r.text);
-    u.rate = 1.05;
-    window.speechSynthesis.speak(u);
+    if (first || !radioOn) continue;  // don't read out the backlog on connect
+    radioQueue.push({ car: n, text: r.text });
   }
+  playNext();
+}
+// play radio clips one after another: Piper audio from the server, else the browser's own voice
+const radioQueue = [];
+let radioBusy = false;
+function playNext() {
+  if (radioBusy || !radioQueue.length) return;
+  const m = radioQueue.shift();
+  radioBusy = true;
+  const done = () => { radioBusy = false; playNext(); };
+  const browserVoice = () => {
+    if (!window.speechSynthesis) return done();
+    const u = new SpeechSynthesisUtterance(m.text);
+    u.rate = 1.05; u.onend = done; u.onerror = done;
+    window.speechSynthesis.speak(u);
+  };
+  const a = new Audio("/api/radio.wav?car=" + encodeURIComponent(m.car) + "&v=" + encodeURIComponent(m.text.length + m.text.slice(0, 20)));
+  a.onended = done;
+  a.onerror = browserVoice;
+  a.play().catch(browserVoice);
 }
 function flipRadio(btn) {
   radioOn = !radioOn;

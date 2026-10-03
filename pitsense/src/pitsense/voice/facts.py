@@ -51,8 +51,10 @@ def _pct(x: Any) -> int | None:
 
 
 def _word(s: Any) -> str:
-    """A free-text clause kept to plain lowercase words, digits and single spaces."""
-    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", str(s).lower())).strip()[:60].strip()
+    """A free-text clause kept to plain lowercase words, digits, decimals and single spaces."""
+    s = re.sub(r"(?<=\d)\.(?=\d)", "qzq", str(s).lower())  # keep decimals: "p3.7" stays a number
+    s = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", s)).replace("qzq", ".")
+    return s.strip()[:60].strip()
 
 
 def compound_name(c: Any) -> str | None:
