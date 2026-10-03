@@ -38,7 +38,7 @@ stopping on that lap for each compound (plus a second stop when the stint is too
 those with the trigger "SC/VSC within 5 laps: box that lap for X"; `strategy__sc_gain` is the places gained.
 When a neutralisation is already out, Plan B is the best alternative plan.
 
-**Head of strategy** (`decide`). Plan A = best plan, unless last lap's target stop lap is within `tol_keep`
+**Head of strategy** (`decide`; timing rules rewritten, see "Call timing pass" below). Plan A = best plan, unless last lap's target stop lap is within `tol_keep`
 (0.05) of the best utility (hysteresis). First stop this lap: `BOX` (`PREPARE_BOX` if the pit lane is closed);
 within 2 laps: `PREPARE_BOX`; none due but a safety car would be worth >= 0.6 places: `BOX_IF_SC`; otherwise
 `STAY_OUT`. `NO_CALL` with the reason when no plan can be made: before lap 2, wet race (`race_dry` false or
@@ -109,6 +109,59 @@ calls BOX on the first lap the plan says now and the plan's best lap moves with 
 Real stop timing depends on things the engineers do not see (tyre temperature, the team's own targets, traffic
 planning).
 
+## Call timing pass (tuned on 2025, 2026 scored once)
+
+Root causes found on 2025 (24 races, top-5 cars, every second lap):
+
+* Plan A's first-stop lap is a poor timing signal: P(real stop in L..L+2) is 0.24 when the plan says "now"
+  (base rate 0.11); AUC of "plan says now" is 0.58, of the models' `pit_prob_1` 0.84 (rivals' hazard 0.78).
+  The plan optimises a flat utility curve, so its argmin wanders (error +4.7 laps at 25 % distance, -5.9 late).
+* `tol_box` and `tol_prep` were defined but never used: BOX needed only "plan's first stop is this lap".
+* The bench replayed without the models bundle, so the simulator and head used the rivals' hazard only.
+* Opponents' later stops ran early on 2025 (next-stop bias -1.8 laps with a correct history; -2.9 in the old
+  table was measured with a stale `history.json`, see Open issues).
+* About 60 % of the real stops are made under SC/VSC or in wet races; calls cannot see a safety car that
+  arrives during the in-lap (recall under SC 0.15).
+
+Fixes (all in `SETTINGS` / `sim.PARAMS`):
+
+| knob | before | after | chosen on 2025 by |
+|---|---|---|---|
+| `use_hazard` | n/a (plan only) | True | head times calls with `a.pp` = models `pit_prob_1/3` (rivals' hazard without a bundle) |
+| `p1_box` / `p3_box` | n/a | 0.25 / 0.50 | BOX needs P(stop this lap) or P(stop within 3) |
+| `p3_prep` | n/a | 0.20 | PREPARE_BOX needs P(stop within 3 laps) |
+| `tol_box` | 0.10 (unused) | 0.30 | places lost stopping now vs plan A |
+| `tol_prep` | 0.12 (unused) | 0.50 | places lost stopping within `prep_laps` vs plan A |
+| `hold` | n/a | 0.7 | thresholds x0.7 for a call already made (hysteresis) |
+| `stint_scale` | 1.0 | 1.12 | opponents' later stints stretched; next-stop bias -1.8 to -0.2 on 2025 |
+| bench | rivals' hazard | models bundle trained before the test year (`data/models/strategy_bench_<year>.pkl`) | honest as-of |
+
+Grid: 3 x 3 x 3 x 2 x 3 thresholds, F1 of precision and recall (top 5 of 162 settings within 0.01 F1 of each
+other, so the choice is a plateau, not a spike). Tried and dropped: recency-weighted stint priors (RPS worse),
+Platt recalibration of `pit_prob` (calibrated within noise on 2025 top-5), a GBM over plan and hazard features
+(AUC 0.80 vs 0.84 for `pit_prob_1` alone). The plan gate is loose on purpose: tighter gates only cost recall.
+
+Before / after (same replay, calls every 2nd lap, +-2 laps; "before" 2025 = old rule on this code base with the
+rebuilt history, "before" 2026 = coordinator's main run with full 2018-2026 history):
+
+| | box calls | precision | recall | BOX with no stop in L..L+2 | STAY_OUT right |
+|---|---|---|---|---|---|
+| 2025 before | 257 (old head, models on) | 0.327 | 0.312 | 0.776 | 0.939 |
+| 2025 after | 210 | 0.490 | 0.358 | 0.567 | 0.962 |
+| 2026 before (main) | - | 0.281 | 0.242 | - | - |
+| 2026 old rule, same sim and models | 155 | 0.303 | 0.312 | 0.842 | 0.933 |
+| 2026 after | 102 | 0.412 | 0.266 | 0.524 | 0.959 |
+
+On 2026 the new head trades recall for precision against the old rule on the same inputs (0.312 to 0.266
+recall); against main's published numbers both rise. Still weak: about half the BOX calls have no stop within
+two laps, because pit probabilities of 0.25-0.4 are what a stop looks like one lap before it happens.
+
+Finishing-position forecast (RPS, lower is better; MAE of the expected position), the `stint_scale` change only
+touches opponents' later stops: 2025 0.0632 to 0.0633 (MAE 2.075 to 2.078); 2026 0.0496 to 0.0493 (MAE 1.631
+to 1.623). Next-stop on 2026 gets worse with the scale (bias -0.19 to +1.15, MAE 5.81 to 6.01): the scale is a
+2025 correction that 2026's shorter stints do not share. Call latency: 0.54 s per call (2025), 0.62 s (2026),
+five cars, models on; under 2 s.
+
 ## Speed
 
 Two focus cars on one snapshot: 0.6 s (288 futures, about 250 plans each) on this machine; per car 0.2 s once
@@ -125,8 +178,11 @@ are not in the benchmark rows).
 
 ## Open issues
 
-* Timing accuracy of box calls (above). Ideas: model the team's real decision process (track position first),
-  use the models bundle's `pit_prob_1` in the focus car's own utility, correct the early bias seen in 2025.
+* Timing accuracy of box calls is still about 0.4-0.5 precision. Ideas: stint-index-specific priors
+  (first stints differ from later ones), per-year stint priors, `sc_ending` boxing (too few cases in 2025:
+  no `sc_ending` records among top-5 stops), and a car-level model of stops under SC.
+* `data/bench/history.json` in a checkout built before the strategy engineer lacks its stint tables: rebuild
+  it (history only, about 45 s) or the strategy priors fall back to defaults and every number moves.
 * Wet and mixed races produce `NO_CALL`: no intermediate/wet tyre model and no crossover plans.
 * One safety car and one VSC at most per simulated future; red flags are treated like a safety car.
 * Lapped cars and blue flags are ignored; a car in the pit lane now is treated as on its old tyres.
