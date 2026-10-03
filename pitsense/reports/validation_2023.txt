@@ -1,0 +1,24 @@
+2023-01-bahrain-grand-prix-race              laps  1055/1056  time 100.0%  pos  99.9%  cmp  99.5%  age  99.8% (feed  99.3%)  in 100.0%  out 100.0%  OK
+2023-02-saudi-arabian-grand-prix-race        laps   942/943   time 100.0%  pos  99.6%  cmp 100.0%  age 100.0% (feed  99.6%)  in 100.0%  out 100.0%  OK
+2023-03-australian-grand-prix-race           laps   995/1003  time 100.0%  pos  99.2%  cmp 100.0%  age  99.9% (feed 100.0%)  in 100.0%  out 100.0%  OK
+2023-04-azerbaijan-grand-prix-race           laps   961/962   time 100.0%  pos  99.9%  cmp 100.0%  age 100.0% (feed  99.7%)  in 100.0%  out 100.0%  OK
+2023-05-miami-grand-prix-race                laps  1138/1138  time 100.0%  pos  99.9%  cmp  99.9%  age 100.0% (feed  99.5%)  in 100.0%  out 100.0%  OK
+2023-06-monaco-grand-prix-race               laps  1513/1515  time 100.0%  pos 100.0%  cmp  99.9%  age  99.9% (feed  99.7%)  in 100.0%  out 100.0%  OK
+2023-07-spanish-grand-prix-race              laps  1312/1312  time 100.0%  pos 100.0%  cmp  99.3%  age  99.3% (feed  99.6%)  in 100.0%  out 100.0%  OK
+2023-08-canadian-grand-prix-race             laps  1315/1317  time 100.0%  pos  99.2%  cmp  99.9%  age  98.0% (feed 100.0%)  in 100.0%  out 100.0%  OK
+2023-09-austrian-grand-prix-race             laps  1353/1354  time 100.0%  pos  99.9%  cmp  99.0%  age  99.7% (feed  99.8%)  in 100.0%  out 100.0%  OK
+2023-10-british-grand-prix-race              laps   970/971   time 100.0%  pos 100.0%  cmp  99.8%  age  99.8% (feed  99.8%)  in 100.0%  out 100.0%  OK
+2023-11-hungarian-grand-prix-race            laps  1252/1252  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  99.7%)  in 100.0%  out 100.0%  OK
+2023-12-belgian-grand-prix-race              laps   815/816   time 100.0%  pos 100.0%  cmp  99.9%  age 100.0% (feed 100.0%)  in 100.0%  out 100.0%  OK
+2023-13-dutch-grand-prix-race                laps  1341/1343  time 100.0%  pos  92.8%  cmp 100.0%  age  98.4% (feed  99.3%)  in 100.0%  out 100.0%  CHECK
+2023-14-italian-grand-prix-race              laps   955/957   time 100.0%  pos  99.6%  cmp 100.0%  age 100.0% (feed 100.0%)  in 100.0%  out 100.0%  OK
+2023-15-singapore-grand-prix-race            laps  1084/1088  time 100.0%  pos 100.0%  cmp  99.8%  age 100.0% (feed 100.0%)  in 100.0%  out 100.0%  OK
+2023-16-japanese-grand-prix-race             laps   880/880   time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  99.9%)  in 100.0%  out 100.0%  OK
+2023-17-qatar-grand-prix-race                laps  1005/1006  time 100.0%  pos  99.4%  cmp 100.0%  age 100.0% (feed  99.3%)  in 100.0%  out 100.0%  OK
+2023-18-united-states-grand-prix-race        laps  1014/1014  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  99.7%)  in 100.0%  out 100.0%  OK
+2023-19-mexico-city-grand-prix-race          laps  1280/1282  time 100.0%  pos  99.7%  cmp 100.0%  age 100.0% (feed 100.0%)  in 100.0%  out 100.0%  OK
+2023-20-sao-paulo-grand-prix-race            laps  1106/1108  time 100.0%  pos  99.9%  cmp  99.9%  age  99.9% (feed 100.0%)  in 100.0%  out 100.0%  OK
+2023-21-las-vegas-grand-prix-race            laps   943/946   time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  97.9%)  in 100.0%  out 100.0%  OK
+2023-22-abu-dhabi-grand-prix-race            laps  1157/1157  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  98.9%)  in 100.0%  out 100.0%  OK
+
+Pooled over 22 sessions, 24,386 laps: lap time 100.000%, position 99.430%, compound 99.848%, tyre age 99.722% (vs feed counter 99.614% of 23,043 laps), in-lap 100.000%, out-lap 100.000%

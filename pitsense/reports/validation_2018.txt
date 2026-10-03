@@ -1,0 +1,24 @@
+2018-01-australian-grand-prix-race           laps   937/940   time 100.0%  pos  99.9%  cmp 100.0%  age  55.8% (feed  99.7%)  in 100.0%  out  99.8%  OK
+2018-02-bahrain-grand-prix-race              laps   996/998   time  79.4%  pos  69.4%  cmp  99.0%  age  71.5% (feed  99.7%)  in  98.9%  out  99.0%  CHECK
+2018-03-chinese-grand-prix-race              laps  1115/1115  time 100.0%  pos 100.0%  cmp  98.5%  age   0.9% (feed  99.8%)  in 100.0%  out 100.0%  OK
+2018-04-azerbaijan-grand-prix-race           laps   841/848   time 100.0%  pos  94.9%  cmp 100.0%  age  68.2% (feed  99.7%)  in 100.0%  out 100.0%  CHECK
+2018-05-spanish-grand-prix-race              laps  1016/1021  time 100.0%  pos  99.7%  cmp  98.7%  age  60.7% (feed  99.4%)  in 100.0%  out 100.0%  OK
+2018-06-monaco-grand-prix-race               laps  1513/1516  time 100.0%  pos  99.5%  cmp 100.0%  age  74.3% (feed  99.9%)  in 100.0%  out 100.0%  OK
+2018-07-canadian-grand-prix-race             laps  1216/1219  time 100.0%  pos  99.7%  cmp 100.0%  age  71.6% (feed  99.9%)  in 100.0%  out 100.0%  OK
+2018-08-french-grand-prix-race               laps   915/920   time 100.0%  pos  98.9%  cmp  93.9%  age  55.1% (feed  99.3%)  in 100.0%  out 100.0%  CHECK
+2018-09-austrian-grand-prix-race             laps  1239/1244  time 100.0%  pos  99.5%  cmp 100.0%  age  69.3% (feed  99.5%)  in 100.0%  out 100.0%  OK
+2018-10-british-grand-prix-race              laps   898/902   time 100.0%  pos  99.7%  cmp 100.0%  age  58.8% (feed 100.0%)  in 100.0%  out 100.0%  OK
+2018-11-german-grand-prix-race               laps  1250/1252  time 100.0%  pos  99.6%  cmp  99.9%  age  56.8% (feed  99.7%)  in 100.0%  out 100.0%  OK
+2018-12-hungarian-grand-prix-race            laps  1230/1233  time 100.0%  pos  99.8%  cmp 100.0%  age  57.9% (feed  99.9%)  in 100.0%  out 100.0%  OK
+2018-13-belgian-grand-prix-race              laps   690/693   time 100.0%  pos  99.9%  cmp  93.8%  age  93.8% (feed  99.4%)  in 100.0%  out 100.0%  OK
+2018-14-italian-grand-prix-race              not compared: DataNotLoadedError: The data you are trying to access has not been loaded yet. See `Session.load`
+2018-15-singapore-grand-prix-race            laps  1145/1146  time 100.0%  pos  99.7%  cmp 100.0%  age  57.2% (feed 100.0%)  in 100.0%  out 100.0%  OK
+2018-16-russian-grand-prix-race              laps   948/948   time 100.0%  pos  99.4%  cmp 100.0%  age  69.3% (feed 100.0%)  in 100.0%  out 100.0%  OK
+2018-17-japanese-grand-prix-race             laps   976/977   time 100.0%  pos  99.7%  cmp  99.9%  age  59.3% (feed  99.7%)  in 100.0%  out 100.0%  OK
+2018-18-united-states-grand-prix-race        laps   931/932   time 100.0%  pos 100.0%  cmp 100.0%  age  96.6% (feed  99.7%)  in 100.0%  out 100.0%  OK
+2018-19-mexican-grand-prix-race              laps  1242/1245  time 100.0%  pos  99.7%  cmp 100.0%  age 100.0% (feed  99.7%)  in 100.0%  out 100.0%  OK
+2018-20-brazilian-grand-prix-race            laps  1318/1318  time 100.0%  pos  99.2%  cmp 100.0%  age 100.0% (feed  99.8%)  in 100.0%  out 100.0%  OK
+2018-21-abu-dhabi-grand-prix-race            laps   938/943   time 100.0%  pos  99.0%  cmp  99.9%  age  94.3% (feed  99.5%)  in 100.0%  out 100.0%  OK
+
+Pooled over 20 sessions, 21,354 laps: lap time 99.038%, position 98.009%, compound 99.335%, tyre age 68.482% (vs feed counter 99.730% of 18,903 laps), in-lap 99.948%, out-lap 99.944%
+Not compared: 2018-14-italian-grand-prix-race

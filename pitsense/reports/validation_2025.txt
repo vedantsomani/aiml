@@ -1,0 +1,26 @@
+2025-01-australian-grand-prix-race           laps   921/927   time 100.0%  pos 100.0%  cmp  99.8%  age  93.1% (feed  93.3%)  in 100.0%  out 100.0%  CHECK
+2025-02-chinese-grand-prix-race              laps  1065/1065  time 100.0%  pos 100.0%  cmp  99.9%  age 100.0% (feed  98.1%)  in 100.0%  out 100.0%  OK
+2025-03-japanese-grand-prix-race             laps  1059/1059  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  97.7%)  in 100.0%  out 100.0%  OK
+2025-04-bahrain-grand-prix-race              laps  1128/1128  time  99.9%  pos  97.3%  cmp 100.0%  age 100.0% (feed  99.1%)  in 100.0%  out 100.0%  CHECK
+2025-05-saudi-arabian-grand-prix-race        laps   897/898   time 100.0%  pos  99.3%  cmp 100.0%  age 100.0% (feed  97.7%)  in 100.0%  out 100.0%  OK
+2025-06-miami-grand-prix-race                laps  1002/1005  time 100.0%  pos 100.0%  cmp 100.0%  age  27.5% (feed  96.0%)  in 100.0%  out 100.0%  CHECK
+2025-07-emilia-romagna-grand-prix-race       laps  1205/1207  time 100.0%  pos 100.0%  cmp  99.9%  age  99.5% (feed  98.5%)  in 100.0%  out 100.0%  OK
+2025-08-monaco-grand-prix-race               laps  1423/1425  time 100.0%  pos  99.4%  cmp  99.2%  age  98.7% (feed  97.3%)  in 100.0%  out 100.0%  OK
+2025-09-spanish-grand-prix-race              laps  1202/1203  time 100.0%  pos  99.8%  cmp 100.0%  age 100.0% (feed  98.6%)  in 100.0%  out 100.0%  OK
+2025-10-canadian-grand-prix-race             laps  1346/1349  time 100.0%  pos  99.9%  cmp  99.9%  age  99.9% (feed  98.2%)  in 100.0%  out 100.0%  OK
+2025-11-austrian-grand-prix-race             laps  1124/1126  time 100.0%  pos  99.9%  cmp 100.0%  age 100.0% (feed  99.2%)  in 100.0%  out 100.0%  OK
+2025-12-british-grand-prix-race              laps   822/825   time 100.0%  pos  99.9%  cmp  99.6%  age 100.0% (feed  98.6%)  in 100.0%  out 100.0%  OK
+2025-13-belgian-grand-prix-race              laps   879/879   time 100.0%  pos 100.0%  cmp 100.0%  age  94.5% (feed  66.0%)  in 100.0%  out 100.0%  CHECK
+2025-14-hungarian-grand-prix-race            laps  1368/1368  time 100.0%  pos 100.0%  cmp 100.0%  age  99.6% (feed  98.2%)  in 100.0%  out 100.0%  OK
+2025-15-dutch-grand-prix-race                laps  1362/1364  time 100.0%  pos  99.2%  cmp 100.0%  age 100.0% (feed  98.0%)  in 100.0%  out 100.0%  OK
+2025-16-italian-grand-prix-race              laps   974/974   time 100.0%  pos  99.9%  cmp 100.0%  age 100.0% (feed  98.2%)  in 100.0%  out 100.0%  OK
+2025-17-azerbaijan-grand-prix-race           laps   967/968   time 100.0%  pos  99.3%  cmp 100.0%  age 100.0% (feed  98.0%)  in 100.0%  out 100.0%  OK
+2025-18-singapore-grand-prix-race            laps  1229/1229  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  97.6%)  in 100.0%  out 100.0%  OK
+2025-19-united-states-grand-prix-race        laps  1066/1067  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  96.7%)  in 100.0%  out 100.0%  OK
+2025-20-mexico-city-grand-prix-race          laps  1262/1263  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  98.2%)  in 100.0%  out 100.0%  OK
+2025-21-sao-paulo-grand-prix-race            laps  1249/1251  time 100.0%  pos  99.8%  cmp 100.0%  age  99.8% (feed  98.1%)  in 100.0%  out 100.0%  OK
+2025-22-las-vegas-grand-prix-race            laps   885/886   time 100.0%  pos  99.9%  cmp 100.0%  age 100.0% (feed  97.6%)  in 100.0%  out 100.0%  OK
+2025-23-qatar-grand-prix-race                laps  1066/1067  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  98.1%)  in 100.0%  out 100.0%  OK
+2025-24-abu-dhabi-grand-prix-race            laps  1156/1156  time 100.0%  pos  99.9%  cmp  99.7%  age  99.7% (feed  98.6%)  in 100.0%  out 100.0%  OK
+
+Pooled over 24 sessions, 26,657 laps: lap time 99.996%, position 99.722%, compound 99.917%, tyre age 96.722% (vs feed counter 97.490% of 24,544 laps), in-lap 100.000%, out-lap 100.000%

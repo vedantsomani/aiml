@@ -1,0 +1,19 @@
+2020-01-austrian-grand-prix-race             laps  1061/1061  time  15.4%  pos  41.1%  cmp  94.3%  age  40.2% (feed  99.8%)  in  93.8%  out  94.1%  CHECK
+2020-02-styrian-grand-prix-race              laps  1226/1226  time 100.0%  pos 100.0%  cmp  99.8%  age  99.8% (feed  99.8%)  in 100.0%  out 100.0%  OK
+2020-03-hungarian-grand-prix-race            laps  1327/1327  time 100.0%  pos  99.8%  cmp  99.4%  age  96.7% (feed  99.4%)  in 100.0%  out 100.0%  OK
+2020-04-british-grand-prix-race              laps   895/897   time 100.0%  pos  99.4%  cmp 100.0%  age 100.0% (feed 100.0%)  in 100.0%  out 100.0%  OK
+2020-05-70th-anniversary-grand-prix-race     laps  1025/1025  time 100.0%  pos 100.0%  cmp  99.9%  age  99.8% (feed  99.3%)  in 100.0%  out 100.0%  OK
+2020-06-spanish-grand-prix-race              laps  1274/1274  time 100.0%  pos 100.0%  cmp 100.0%  age  99.9% (feed  99.8%)  in 100.0%  out 100.0%  OK
+2020-07-belgian-grand-prix-race              laps   766/768   time 100.0%  pos  99.6%  cmp  82.6%  age  87.1% (feed  99.9%)  in 100.0%  out 100.0%  OK
+2020-08-italian-grand-prix-race              laps   924/926   time 100.0%  pos  98.5%  cmp 100.0%  age 100.0% (feed  99.6%)  in 100.0%  out 100.0%  CHECK
+2020-09-tuscan-grand-prix-race               laps   778/786   time 100.0%  pos  98.3%  cmp 100.0%  age 100.0% (feed  99.1%)  in 100.0%  out 100.0%  CHECK
+2020-10-russian-grand-prix-race              laps   946/948   time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  99.9%)  in 100.0%  out 100.0%  OK
+2020-11-eifel-grand-prix-race                laps  1017/1019  time 100.0%  pos 100.0%  cmp  99.9%  age  99.9% (feed  99.5%)  in 100.0%  out 100.0%  OK
+2020-12-portuguese-grand-prix-race           laps  1288/1288  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  99.5%)  in 100.0%  out 100.0%  OK
+2020-13-emilia-romagna-grand-prix-race       laps  1128/1131  time 100.0%  pos  99.9%  cmp 100.0%  age 100.0% (feed  99.4%)  in 100.0%  out 100.0%  OK
+2020-14-turkish-grand-prix-race              laps  1076/1077  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  99.4%)  in 100.0%  out 100.0%  OK
+2020-15-bahrain-grand-prix-race              laps  1016/1019  time 100.0%  pos 100.0%  cmp  99.9%  age  99.8% (feed  99.8%)  in 100.0%  out 100.0%  OK
+2020-16-sakhir-grand-prix-race               laps  1531/1534  time 100.0%  pos 100.0%  cmp  99.9%  age  99.9% (feed  99.5%)  in 100.0%  out 100.0%  OK
+2020-17-abu-dhabi-grand-prix-race            laps  1043/1044  time 100.0%  pos 100.0%  cmp  99.9%  age 100.0% (feed  99.8%)  in 100.0%  out 100.0%  OK
+
+Pooled over 17 sessions, 18,321 laps: lap time 95.098%, position 96.384%, compound 98.859%, tyre age 95.708% (vs feed counter 99.609% of 17,117 laps), in-lap 99.640%, out-lap 99.656%

@@ -1,0 +1,24 @@
+2021-01-bahrain-grand-prix-race              laps  1026/1027  time 100.0%  pos 100.0%  cmp  99.9%  age  98.1% (feed  97.7%)  in 100.0%  out 100.0%  OK
+2021-02-emilia-romagna-grand-prix-race       laps  1124/1127  time 100.0%  pos  94.0%  cmp 100.0%  age  86.1% (feed  99.9%)  in 100.0%  out 100.0%  CHECK
+2021-03-portuguese-grand-prix-race           laps  1244/1245  time 100.0%  pos  99.9%  cmp 100.0%  age 100.0% (feed 100.0%)  in 100.0%  out 100.0%  OK
+2021-04-spanish-grand-prix-race              laps  1246/1247  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  99.9%)  in 100.0%  out 100.0%  OK
+2021-05-monaco-grand-prix-race               laps  1418/1419  time 100.0%  pos  98.7%  cmp 100.0%  age 100.0% (feed  99.9%)  in 100.0%  out  99.9%  CHECK
+2021-06-azerbaijan-grand-prix-race           laps   941/943   time 100.0%  pos 100.0%  cmp  99.6%  age  99.3% (feed  99.3%)  in 100.0%  out 100.0%  OK
+2021-07-french-grand-prix-race               laps  1051/1051  time 100.0%  pos  99.9%  cmp  98.2%  age 100.0% (feed 100.0%)  in 100.0%  out 100.0%  OK
+2021-08-styrian-grand-prix-race              laps  1296/1296  time 100.0%  pos  98.6%  cmp  99.9%  age  99.9% (feed  98.1%)  in 100.0%  out 100.0%  CHECK
+2021-09-austrian-grand-prix-race             laps  1336/1338  time 100.0%  pos  99.9%  cmp 100.0%  age 100.0% (feed  99.9%)  in 100.0%  out 100.0%  OK
+2021-10-british-grand-prix-race              laps   969/970   time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  99.6%)  in 100.0%  out 100.0%  OK
+2021-11-hungarian-grand-prix-race            laps   981/985   time 100.0%  pos 100.0%  cmp  99.8%  age  99.9% (feed  99.8%)  in 100.0%  out 100.0%  OK
+2021-12-belgian-grand-prix-race              laps    60/60    time   nan%  pos 100.0%  cmp   nan%  age  65.0% (feed  69.0%)  in 100.0%  out 100.0%  CHECK
+2021-13-dutch-grand-prix-race                laps  1361/1361  time 100.0%  pos  99.9%  cmp 100.0%  age 100.0% (feed  99.6%)  in 100.0%  out 100.0%  OK
+2021-14-italian-grand-prix-race              laps   889/891   time 100.0%  pos  99.9%  cmp 100.0%  age 100.0% (feed  99.7%)  in 100.0%  out 100.0%  OK
+2021-15-russian-grand-prix-race              laps  1025/1025  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  99.9%)  in 100.0%  out 100.0%  OK
+2021-16-turkish-grand-prix-race              laps  1147/1147  time 100.0%  pos 100.0%  cmp 100.0%  age  99.9% (feed  99.5%)  in 100.0%  out 100.0%  OK
+2021-17-united-states-grand-prix-race        laps  1044/1044  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  99.7%)  in 100.0%  out 100.0%  OK
+2021-18-mexico-city-grand-prix-race          laps  1259/1261  time 100.0%  pos 100.0%  cmp  99.8%  age  99.8% (feed  99.4%)  in 100.0%  out 100.0%  OK
+2021-19-sao-paulo-grand-prix-race            laps  1360/1360  time 100.0%  pos  99.9%  cmp  99.9%  age  97.5% (feed  99.2%)  in 100.0%  out 100.0%  OK
+2021-20-qatar-grand-prix-race                laps  1112/1114  time 100.0%  pos  99.4%  cmp 100.0%  age 100.0% (feed  99.8%)  in 100.0%  out 100.0%  OK
+2021-21-saudi-arabian-grand-prix-race        laps   841/845   time 100.0%  pos  99.9%  cmp 100.0%  age 100.0% (feed 100.0%)  in 100.0%  out 100.0%  OK
+2021-22-abu-dhabi-grand-prix-race            laps   998/1000  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  99.8%)  in 100.0%  out 100.0%  OK
+
+Pooled over 22 sessions, 23,728 laps: lap time 100.000%, position 99.507%, compound 99.865%, tyre age 98.972% (vs feed counter 99.445% of 21,786 laps), in-lap 100.000%, out-lap 99.992%

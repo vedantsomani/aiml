@@ -1,0 +1,26 @@
+2024-01-bahrain-grand-prix-race              laps  1129/1129  time 100.0%  pos  99.6%  cmp  99.9%  age  99.9% (feed  99.0%)  in 100.0%  out 100.0%  OK
+2024-02-saudi-arabian-grand-prix-race        laps   900/901   time 100.0%  pos  99.9%  cmp 100.0%  age 100.0% (feed  99.0%)  in 100.0%  out 100.0%  OK
+2024-03-australian-grand-prix-race           laps   995/998   time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed 100.0%)  in 100.0%  out 100.0%  OK
+2024-04-japanese-grand-prix-race             laps   905/907   time 100.0%  pos  99.4%  cmp 100.0%  age 100.0% (feed 100.0%)  in 100.0%  out 100.0%  OK
+2024-05-chinese-grand-prix-race              laps  1030/1032  time 100.0%  pos 100.0%  cmp  99.9%  age  99.9% (feed 100.0%)  in 100.0%  out 100.0%  OK
+2024-06-miami-grand-prix-race                laps  1110/1111  time 100.0%  pos 100.0%  cmp 100.0%  age  98.9% (feed  98.3%)  in 100.0%  out 100.0%  OK
+2024-07-emilia-romagna-grand-prix-race       laps  1238/1238  time 100.0%  pos  99.6%  cmp 100.0%  age 100.0% (feed  98.8%)  in 100.0%  out 100.0%  OK
+2024-08-monaco-grand-prix-race               laps  1233/1237  time 100.0%  pos  99.8%  cmp 100.0%  age 100.0% (feed  99.4%)  in 100.0%  out 100.0%  OK
+2024-09-canadian-grand-prix-race             laps  1267/1272  time 100.0%  pos  99.8%  cmp 100.0%  age 100.0% (feed  98.8%)  in 100.0%  out 100.0%  OK
+2024-10-spanish-grand-prix-race              laps  1310/1310  time 100.0%  pos  99.8%  cmp  99.9%  age  99.9% (feed  98.8%)  in 100.0%  out 100.0%  OK
+2024-11-austrian-grand-prix-race             laps  1405/1405  time 100.0%  pos 100.0%  cmp  98.7%  age  98.6% (feed  98.8%)  in 100.0%  out 100.0%  OK
+2024-12-british-grand-prix-race              laps   960/961   time 100.0%  pos  99.9%  cmp 100.0%  age 100.0% (feed  98.8%)  in 100.0%  out 100.0%  OK
+2024-13-hungarian-grand-prix-race            laps  1355/1355  time 100.0%  pos  99.6%  cmp 100.0%  age 100.0% (feed  99.3%)  in 100.0%  out 100.0%  OK
+2024-14-belgian-grand-prix-race              laps   841/841   time 100.0%  pos 100.0%  cmp  86.3%  age  93.8% (feed 100.0%)  in 100.0%  out 100.0%  OK
+2024-15-dutch-grand-prix-race                laps  1426/1426  time 100.0%  pos  98.7%  cmp 100.0%  age 100.0% (feed  98.5%)  in 100.0%  out 100.0%  CHECK
+2024-16-italian-grand-prix-race              laps  1008/1008  time 100.0%  pos  99.8%  cmp 100.0%  age 100.0% (feed  99.3%)  in 100.0%  out 100.0%  OK
+2024-17-azerbaijan-grand-prix-race           laps   971/973   time 100.0%  pos  99.8%  cmp 100.0%  age 100.0% (feed  99.8%)  in 100.0%  out 100.0%  OK
+2024-18-singapore-grand-prix-race            laps  1177/1177  time 100.0%  pos  99.9%  cmp 100.0%  age 100.0% (feed  98.0%)  in 100.0%  out 100.0%  OK
+2024-19-united-states-grand-prix-race        laps  1058/1059  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  98.7%)  in 100.0%  out 100.0%  OK
+2024-20-mexico-city-grand-prix-race          laps  1213/1215  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  97.4%)  in 100.0%  out 100.0%  OK
+2024-21-sao-paulo-grand-prix-race            laps  1133/1135  time 100.0%  pos  99.8%  cmp 100.0%  age  99.6% (feed  97.5%)  in 100.0%  out 100.0%  OK
+2024-22-las-vegas-grand-prix-race            laps   938/938   time 100.0%  pos 100.0%  cmp  99.0%  age  97.4% (feed  97.5%)  in 100.0%  out 100.0%  OK
+2024-23-qatar-grand-prix-race                laps   939/943   time 100.0%  pos 100.0%  cmp  99.5%  age  99.5% (feed  98.6%)  in 100.0%  out 100.0%  OK
+2024-24-abu-dhabi-grand-prix-race            laps  1033/1035  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  98.0%)  in 100.0%  out 100.0%  OK
+
+Pooled over 24 sessions, 26,574 laps: lap time 100.000%, position 99.797%, compound 99.436%, tyre age 99.548% (vs feed counter 98.822% of 25,644 laps), in-lap 100.000%, out-lap 100.000%

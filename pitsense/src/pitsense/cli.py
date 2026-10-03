@@ -114,8 +114,11 @@ def _validate_one(args):
     from .validate import compare
 
     warnings.filterwarnings("ignore")
-    rep, _ = compare(ref, cache)
-    return rep
+    try:
+        rep, _ = compare(ref, cache)
+    except Exception as exc:  # e.g. FastF1 can't load one race; report it, keep going
+        return ref.slug, f"{type(exc).__name__}: {exc}"
+    return ref.slug, rep
 
 
 def cmd_validate(a) -> None:
@@ -124,18 +127,34 @@ def cmd_validate(a) -> None:
     refs = _races(a.year, a.race)
     cache = str(data_dir() / "fastf1_cache")
     os.makedirs(cache, exist_ok=True)
-    reports = []
-    for rep in _map(_validate_one, [(r, cache) for r in refs], a.jobs):
+    reports, failed = [], []
+    for slug, rep in _map(_validate_one, [(r, cache) for r in refs], a.jobs):
+        if isinstance(rep, str):
+            print(f"{slug:<44} not compared: {rep[:150]}", flush=True)
+            failed.append(slug)
+            continue
         print(rep.line(), flush=True)
         reports.append(rep)
     n = sum(r.n_both for r in reports)
     if n:
-        w = lambda k: sum(getattr(r, k) * r.n_both for r in reports) / n  # noqa: E731
+
+        def w(k: str) -> float:
+            """Lap-weighted mean over races where the check applies (Spa 2021 has no lap times)."""
+            rs = [r for r in reports if getattr(r, k) == getattr(r, k)]  # skip NaN
+            n_k = sum(r.n_both for r in rs)
+            return sum(getattr(r, k) * r.n_both for r in rs) / n_k if n_k else float("nan")
+
+        fed = [r for r in reports if r.n_feed_age]
+        n_fed = sum(r.n_feed_age for r in fed)
+        feed = sum(r.feed_age_match * r.n_feed_age for r in fed) / n_fed if n_fed else float("nan")
         print(
             f"\nPooled over {len(reports)} sessions, {n:,} laps: lap time {w('lap_time_exact'):.3%}, "
             f"position {w('position_match'):.3%}, compound {w('compound_match'):.3%}, "
-            f"tyre age {w('tyre_age_match'):.3%}, in-lap {w('in_lap_match'):.3%}, out-lap {w('out_lap_match'):.3%}"
+            f"tyre age {w('tyre_age_match'):.3%} (vs feed counter {feed:.3%} of {n_fed:,} laps), "
+            f"in-lap {w('in_lap_match'):.3%}, out-lap {w('out_lap_match'):.3%}"
         )
+    if failed:
+        print(f"Not compared: {', '.join(failed)}")
 
 
 def cmd_leakcheck(a) -> None:

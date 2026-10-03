@@ -1,0 +1,17 @@
+2026-01-australian-grand-prix-race           laps  1003/1006  time 100.0%  pos  99.8%  cmp  99.8%  age 100.0% (feed  99.2%)  in 100.0%  out 100.0%  OK
+2026-02-chinese-grand-prix-race              laps   919/920   time 100.0%  pos  99.8%  cmp  99.8%  age  99.8% (feed  98.6%)  in 100.0%  out 100.0%  OK
+2026-03-japanese-grand-prix-race             laps  1106/1107  time 100.0%  pos  96.9%  cmp 100.0%  age 100.0% (feed  98.6%)  in 100.0%  out 100.0%  CHECK
+2026-04-miami-grand-prix-race                laps  1038/1040  time 100.0%  pos 100.0%  cmp  99.9%  age  99.9% (feed  98.3%)  in 100.0%  out 100.0%  OK
+2026-05-canadian-grand-prix-race             laps  1206/1211  time 100.0%  pos  99.5%  cmp 100.0%  age 100.0% (feed  98.5%)  in 100.0%  out 100.0%  OK
+2026-06-monaco-grand-prix-race               laps  1445/1452  time 100.0%  pos  98.5%  cmp  99.9%  age  96.1% (feed  98.8%)  in 100.0%  out 100.0%  CHECK
+2026-07-barcelona-grand-prix-race            laps  1234/1236  time 100.0%  pos 100.0%  cmp  99.8%  age  99.8% (feed  98.8%)  in 100.0%  out 100.0%  OK
+2026-08-austrian-grand-prix-race             laps  1338/1339  time 100.0%  pos 100.0%  cmp  99.7%  age  99.7% (feed  97.4%)  in 100.0%  out 100.0%  OK
+2026-09-british-grand-prix-race              laps  1111/1113  time 100.0%  pos  99.5%  cmp 100.0%  age  99.9% (feed  98.6%)  in 100.0%  out 100.0%  OK
+2026-10-belgian-grand-prix-race              laps   871/872   time 100.0%  pos  99.8%  cmp  97.0%  age  97.0% (feed  98.8%)  in 100.0%  out 100.0%  OK
+2026-11-hungarian-grand-prix-race            laps  1429/1431  time 100.0%  pos  99.9%  cmp 100.0%  age  99.9% (feed  99.0%)  in 100.0%  out 100.0%  OK
+2026-12-dutch-grand-prix-race                laps  1366/1368  time 100.0%  pos  93.8%  cmp 100.0%  age  95.6% (feed  98.7%)  in 100.0%  out 100.0%  CHECK
+2026-13-italian-grand-prix-race              laps  1052/1054  time 100.0%  pos  99.9%  cmp  99.5%  age  99.5% (feed  98.6%)  in 100.0%  out 100.0%  OK
+2026-14-spanish-grand-prix-race              laps  1105/1106  time 100.0%  pos 100.0%  cmp 100.0%  age  99.9% (feed  98.1%)  in 100.0%  out 100.0%  OK
+2026-15-azerbaijan-grand-prix-race           laps   976/981   time 100.0%  pos  99.6%  cmp 100.0%  age 100.0% (feed  97.1%)  in 100.0%  out 100.0%  OK
+
+Pooled over 15 sessions, 17,199 laps: lap time 100.000%, position 99.046%, compound 99.744%, tyre age 99.063% (vs feed counter 98.500% of 16,272 laps), in-lap 100.000%, out-lap 100.000%

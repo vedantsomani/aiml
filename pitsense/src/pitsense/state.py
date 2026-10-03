@@ -18,11 +18,23 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from .config import DRY_COMPOUNDS, TRACK_STATUS
+from .config import DRY_COMPOUNDS, NOMINATIONS, TRACK_STATUS
 from .events import Event, EventLog
 from .merge import clone, deep_merge
 
 _LAPS_DOWN = re.compile(r"^\+?(\d+)\s*L(?:AP)?S?$", re.IGNORECASE)
+
+
+def relative_compound(compound: str, meta: dict) -> str:
+    """A compound as SOFT/MEDIUM/HARD: 2018's Pirelli names via the weekend's nominations.
+
+    The rank among the three compounds nominated before the race gives the name; the
+    tyres used during the race never do. Other names and later seasons pass through.
+    """
+    nominated = NOMINATIONS.get((meta.get("year"), meta.get("meeting_name")))
+    if nominated and compound in nominated:
+        return DRY_COMPOUNDS[nominated.index(compound)]
+    return compound
 
 
 # --------------------------------------------------------------------------- parsing helpers
@@ -354,11 +366,18 @@ class RaceState:
             start_age = _to_int(cur.get("StartLaps"))
             if start_age is not None:
                 d.stint_start_age = start_age
+            # every set fitted so far, not just the current one: when several records
+            # arrive in one message (2018 publishes the first ones minutes after the
+            # start, after any lap-1 stops), the earlier sets are never current
+            for i in real:
+                used = str(stints[i].get("Compound", "")).upper()
+                if used and used not in ("UNKNOWN", "TEST_UNKNOWN"):
+                    used = relative_compound(used, self.meta)
+                    if used not in d.compounds_used:
+                        d.compounds_used.append(used)
             compound = str(cur.get("Compound", "")).upper() or None
             if compound and compound not in ("UNKNOWN", "TEST_UNKNOWN"):
-                d.compound = compound
-                if compound not in d.compounds_used:
-                    d.compounds_used.append(compound)
+                d.compound = relative_compound(compound, self.meta)
             new = cur.get("New")
             d.tyre_new = None if new is None else str(new).lower() == "true"
             self._update_tyre_age(d)
@@ -460,7 +479,11 @@ class RaceState:
                 value = parse_lap_time(llt["Value"])
                 d.last_lap_time = value
                 pending = self._pending_time.get(num)
-                if pending is not None and (pending.lap_time is None or pending.lap_time_inferred):
+                # A value sent apart from the lap count completes the pending lap, unless
+                # more than half of it has passed since that lap ended: then it is the next
+                # lap's time, sent just before its count (seen in 2018, never in 2025-26).
+                if (pending is not None and (pending.lap_time is None or pending.lap_time_inferred)
+                        and e.t - pending.t_end <= value / 2):
                     pending.lap_time, pending.lap_time_t, pending.lap_time_inferred = value, e.t, False
             blt = upd.get("BestLapTime")
             if isinstance(blt, dict) and "Value" in blt:

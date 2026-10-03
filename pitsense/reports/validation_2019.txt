@@ -1,0 +1,23 @@
+2019-01-australian-grand-prix-race           laps  1038/1041  time 100.0%  pos  98.5%  cmp 100.0%  age 100.0% (feed  99.9%)  in 100.0%  out 100.0%  CHECK
+2019-02-bahrain-grand-prix-race              laps  1081/1083  time 100.0%  pos 100.0%  cmp 100.0%  age  96.6% (feed  99.6%)  in 100.0%  out 100.0%  OK
+2019-03-chinese-grand-prix-race              laps  1046/1046  time 100.0%  pos  99.6%  cmp 100.0%  age 100.0% (feed  99.9%)  in 100.0%  out 100.0%  OK
+2019-04-azerbaijan-grand-prix-race           laps   947/948   time 100.0%  pos  98.8%  cmp 100.0%  age  95.9% (feed  99.5%)  in 100.0%  out 100.0%  CHECK
+2019-05-spanish-grand-prix-race              laps  1274/1276  time 100.0%  pos  99.9%  cmp 100.0%  age 100.0% (feed  99.9%)  in 100.0%  out 100.0%  OK
+2019-06-monaco-grand-prix-race               laps  1489/1490  time 100.0%  pos  99.9%  cmp 100.0%  age  97.5% (feed 100.0%)  in 100.0%  out 100.0%  OK
+2019-07-canadian-grand-prix-race             laps  1310/1312  time 100.0%  pos  99.8%  cmp 100.0%  age  92.8% (feed  99.9%)  in 100.0%  out 100.0%  OK
+2019-08-french-grand-prix-race               laps  1036/1037  time 100.0%  pos  99.4%  cmp 100.0%  age 100.0% (feed  99.5%)  in 100.0%  out  99.8%  OK
+2019-09-austrian-grand-prix-race             laps  1401/1401  time 100.0%  pos 100.0%  cmp 100.0%  age  99.5% (feed  99.8%)  in 100.0%  out 100.0%  OK
+2019-10-british-grand-prix-race              laps   913/914   time 100.0%  pos 100.0%  cmp 100.0%  age  99.8% (feed  99.5%)  in 100.0%  out 100.0%  OK
+2019-11-german-grand-prix-race               laps  1054/1059  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  99.6%)  in 100.0%  out 100.0%  OK
+2019-12-hungarian-grand-prix-race            laps  1358/1358  time 100.0%  pos 100.0%  cmp 100.0%  age  98.5% (feed  99.6%)  in 100.0%  out 100.0%  OK
+2019-13-belgian-grand-prix-race              laps   784/787   time 100.0%  pos  99.7%  cmp  94.6%  age  94.6% (feed  99.7%)  in 100.0%  out 100.0%  OK
+2019-14-italian-grand-prix-race              laps   990/991   time 100.0%  pos 100.0%  cmp  99.9%  age 100.0% (feed  99.3%)  in 100.0%  out 100.0%  OK
+2019-15-singapore-grand-prix-race            laps  1162/1165  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  99.2%)  in 100.0%  out 100.0%  OK
+2019-16-russian-grand-prix-race              laps   900/901   time 100.0%  pos 100.0%  cmp  99.9%  age  95.0% (feed  99.4%)  in 100.0%  out 100.0%  OK
+2019-17-japanese-grand-prix-race             laps  1004/1005  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed 100.0%)  in 100.0%  out 100.0%  OK
+2019-18-mexican-grand-prix-race              laps  1370/1370  time 100.0%  pos  98.2%  cmp 100.0%  age 100.0% (feed  99.7%)  in 100.0%  out 100.0%  CHECK
+2019-19-united-states-grand-prix-race        laps  1030/1032  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  99.8%)  in 100.0%  out 100.0%  OK
+2019-20-brazilian-grand-prix-race            laps  1381/1385  time 100.0%  pos  98.8%  cmp  99.6%  age  99.6% (feed  98.0%)  in 100.0%  out 100.0%  CHECK
+2019-21-abu-dhabi-grand-prix-race            laps  1075/1075  time 100.0%  pos 100.0%  cmp 100.0%  age 100.0% (feed  99.5%)  in 100.0%  out 100.0%  OK
+
+Pooled over 21 sessions, 23,643 laps: lap time 100.000%, position 99.645%, compound 99.793%, tyre age 98.608% (vs feed counter 99.581% of 23,394 laps), in-lap 100.000%, out-lap 99.992%

@@ -20,10 +20,42 @@ from pathlib import Path
 
 import requests
 
-from .config import ARCHIVE_BASE, DEFAULT_TOPICS, raw_dir
+from .config import ARCHIVE_BASE, ARCHIVE_MIRRORS, DEFAULT_TOPICS, raw_dir
+from .events import parse_stream_line
 
 _SESSION = requests.Session()
 _SESSION.headers["User-Agent"] = "pitsense/0.1 (+https://github.com/)"
+
+# Sessions whose streams are published but which the season's Index.json leaves out
+# (checked against the archive in Oct 2026): 2018 starts at round 2, 2024 at round 10.
+# Each session's own SessionInfo stream supplies the fields an index entry would have.
+INDEX_GAPS: dict[int, tuple[str, ...]] = {
+    2018: ("2018/2018-03-25_Australian_Grand_Prix/2018-03-25_Race/",),
+    2024: tuple(
+        f"2024/{p}/"
+        for p in (
+            "2024-03-02_Bahrain_Grand_Prix/2024-03-02_Race",
+            "2024-03-09_Saudi_Arabian_Grand_Prix/2024-03-09_Race",
+            "2024-03-24_Australian_Grand_Prix/2024-03-24_Race",
+            "2024-04-07_Japanese_Grand_Prix/2024-04-07_Race",
+            "2024-04-21_Chinese_Grand_Prix/2024-04-20_Sprint",
+            "2024-04-21_Chinese_Grand_Prix/2024-04-21_Race",
+            "2024-05-05_Miami_Grand_Prix/2024-05-04_Sprint",
+            "2024-05-05_Miami_Grand_Prix/2024-05-05_Race",
+            "2024-05-19_Emilia_Romagna_Grand_Prix/2024-05-19_Race",
+            "2024-05-26_Monaco_Grand_Prix/2024-05-26_Race",
+            "2024-06-09_Canadian_Grand_Prix/2024-06-09_Race",
+        )
+    ),
+}
+
+# The archive gives Mugello (2020 Tuscan GP, meeting 1053) the circuit key Jeddah has
+# used since 2021. A key of its own keeps Jeddah's first pit-loss prior from coming
+# from Mugello. Negative: not an official key. Meeting key -> circuit key.
+CIRCUIT_KEY_FIXES: dict[int, int] = {1053: -149}
+
+# Type "Race" sessions that are sprints. 2021's sprints were called "Sprint Qualifying".
+SPRINT_NAMES = ("Sprint", "Sprint Qualifying")
 
 
 @dataclass(frozen=True)
@@ -100,6 +132,79 @@ def _decode(content: bytes) -> str:
     return content.decode("utf-8-sig")
 
 
+def _get_archive(path: str) -> tuple[bytes, str] | None:
+    """(content, base URL) of an archive file, from the first source that publishes it."""
+    for base in (ARCHIVE_BASE, *ARCHIVE_MIRRORS):
+        r = _get(f"{base}{path}")
+        if r is not None:
+            return r.content, base
+    return None
+
+
+def _save(target: Path, content: bytes, base: str) -> None:
+    """Write atomically; note the source in SOURCES.json when it wasn't the archive."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(".part")
+    tmp.write_bytes(content)
+    tmp.replace(target)
+    sources = target.parent / "SOURCES.json"
+    if base != ARCHIVE_BASE or sources.exists():
+        known = json.loads(sources.read_text(encoding="utf-8")) if sources.exists() else {}
+        if base == ARCHIVE_BASE:
+            known.pop(target.name, None)  # re-fetched from the archive itself
+        else:
+            known[target.name] = base
+        sources.write_text(json.dumps(known, indent=1, sort_keys=True), encoding="utf-8")
+
+
+def _session_info(path: str) -> dict | None:
+    """The first SessionInfo message of a session: the same fields as its index entry.
+
+    Session metadata (names, keys, scheduled start), published before the session.
+    """
+    local = raw_dir() / path.rstrip("/") / "SessionInfo.jsonStream"
+    if not local.exists():
+        got = _get_archive(f"{path}SessionInfo.jsonStream")
+        if got is None:
+            return None
+        _save(local, *got)
+    for line in _decode(local.read_bytes()).splitlines():
+        parsed = parse_stream_line(line)
+        if parsed is not None and isinstance(parsed[1], dict) and parsed[1].get("Path") == path:
+            return parsed[1]
+    return None
+
+
+def _first_start(meeting: dict) -> str:
+    return min((s.get("StartDate") or "" for s in meeting.get("Sessions", [])), default="")
+
+
+def _fill_gaps(year: int, meetings: list[dict]) -> list[dict]:
+    """Add the INDEX_GAPS sessions the index lacks, keeping meetings in calendar order."""
+    gaps = INDEX_GAPS.get(year, ())
+    if not gaps:
+        return meetings
+    meetings = [dict(m, Sessions=list(m.get("Sessions", []))) for m in meetings]
+    known = {s.get("Path") for m in meetings for s in m["Sessions"]}
+    for path in gaps:
+        if path in known:
+            continue
+        info = _session_info(path)
+        if info is None:
+            continue
+        session = {k: info.get(k) for k in ("Key", "Type", "Name", "StartDate", "EndDate", "GmtOffset", "Path")}
+        meeting = info.get("Meeting") or {}
+        home = next((m for m in meetings if m.get("Key") == meeting.get("Key")), None)
+        if home is None:
+            home = {**meeting, "Sessions": []}
+            start = session.get("StartDate") or ""
+            i = next((k for k, m in enumerate(meetings) if _first_start(m) > start), len(meetings))
+            meetings.insert(i, home)
+        home["Sessions"].append(session)
+        home["Sessions"].sort(key=lambda s: s.get("StartDate") or "")
+    return meetings
+
+
 def fetch_index(year: int, *, refresh: bool = False) -> list[SessionRef]:
     """All sessions of a season, in calendar order (pre-season testing excluded)."""
     cache = raw_dir() / str(year) / "Index.json"
@@ -110,21 +215,23 @@ def fetch_index(year: int, *, refresh: bool = False) -> list[SessionRef]:
         or (year >= datetime.now(timezone.utc).year and time.time() - cache.stat().st_mtime > 86400)
     )
     if stale:
-        r = _get(f"{ARCHIVE_BASE}{year}/Index.json")
-        if r is None:
+        got = _get_archive(f"{year}/Index.json")
+        if got is None:
             raise RuntimeError(f"No archive index for {year}")
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_bytes(r.content)
+        _save(cache, *got)
     data = json.loads(_decode(cache.read_bytes()))
 
     refs: list[SessionRef] = []
     round_index = 0
-    for meeting in data.get("Meetings", []):
+    for meeting in _fill_gaps(year, data.get("Meetings", [])):
         if "test" in meeting.get("Name", "").lower():
             continue
         round_index += 1
+        circuit_key = int((meeting.get("Circuit") or {}).get("Key", -1))
         for s in meeting.get("Sessions", []):
-            if not s.get("Path"):
+            # sessions without data, and ones filed under another season: the 2021 index
+            # lists a 2022 FOM track test whose path starts with "../uat/"
+            if not s.get("Path") or not s["Path"].startswith(f"{year}/"):
                 continue
             refs.append(
                 SessionRef(
@@ -133,7 +240,7 @@ def fetch_index(year: int, *, refresh: bool = False) -> list[SessionRef]:
                     meeting_name=meeting.get("Name", ""),
                     location=meeting.get("Location", ""),
                     country=(meeting.get("Country") or {}).get("Name", ""),
-                    circuit_key=int((meeting.get("Circuit") or {}).get("Key", -1)),
+                    circuit_key=CIRCUIT_KEY_FIXES.get(int(meeting["Key"]), circuit_key),
                     circuit=(meeting.get("Circuit") or {}).get("ShortName", ""),
                     round_index=round_index,
                     session_key=int(s.get("Key", -1)),
@@ -148,13 +255,16 @@ def fetch_index(year: int, *, refresh: bool = False) -> list[SessionRef]:
 
 
 def races(year: int, *, include_sprints: bool = False, refresh: bool = False) -> list[SessionRef]:
-    """Grand Prix race sessions of a season that have already started."""
+    """Grand Prix race sessions of a season that have already started (and sprints if asked).
+
+    Selected by name: Type "Race" also covers 2021's sprints and one-off test sessions.
+    """
     now = datetime.now(timezone.utc)
     out = []
     for ref in fetch_index(year, refresh=refresh):
         if ref.session_type != "Race":
             continue
-        if ref.session_name == "Sprint" and not include_sprints:
+        if ref.session_name != "Race" and not (include_sprints and ref.session_name in SPRINT_NAMES):
             continue
         if ref.start_utc > now:
             continue
@@ -197,13 +307,11 @@ def download_session(
         missing = out / f"{topic}.missing"
         if not force and (target.exists() or missing.exists()):
             continue
-        r = _get(f"{ARCHIVE_BASE}{ref.path}{topic}.jsonStream")
-        if r is None:
+        got = _get_archive(f"{ref.path}{topic}.jsonStream")
+        if got is None:
             missing.write_text("not published for this session\n", encoding="utf-8")
             continue
-        tmp = target.with_suffix(".part")
-        tmp.write_bytes(r.content)
-        tmp.replace(target)
+        _save(target, *got)
     return out
 
 
