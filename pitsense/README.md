@@ -1,20 +1,27 @@
 # PitSense
 
-A leakage-safe F1 race-strategy engine, and an open benchmark to score strategy engines against what actually happened.
+A virtual F1 pit wall that runs on the public timing feed. It has one engineer per role on a race-strategy team, and every one of them is scored against what actually happened, without ever seeing the future.
 
-**v0.1 (Oct 2026)** contains the foundation:
+| Engineer | Job | Doc |
+|---|---|---|
+| Data | rebuilds the race from the raw feed; every Grand Prix 2018–2026 (188 races), validated against FastF1 | [data](docs/data.md) |
+| Tyres & pace | fuel-corrected pace, wear, tyre-cliff risk, pace on fresh tyres | [tyre](docs/engineers/tyre.md) |
+| Pit stops | what a stop costs now (green / SC / VSC), where the car rejoins | [pitstop](docs/engineers/pitstop.md) |
+| Rivals | who pits when, undercut threats and chances | [rivals](docs/engineers/rivals.md) |
+| Rules | race control as structured facts: penalties, SC phases, the compound rule | [rules](docs/engineers/rules.md) |
+| Weather | rain in the next 10 minutes, slick / intermediate crossover | [weather](docs/engineers/weather.md) |
+| Models | cross-race models served live, identical to the benchmark | [models](docs/models.md) |
+| Strategy & head | Monte Carlo race simulation, Plan A / B, BOX / STAY OUT calls with reasons | [strategy](docs/engineers/strategy.md) |
+| Voice | our own small language model: radio calls and briefs, fact-checked | [voice](docs/engineers/voice.md) |
 
-- **One code path for replay and live.** Raw timing messages go into one deterministic state machine, whether they come from the public archive or from a live recording.
-- **"As of" guarantees.** Every value carries the time it became known. Two checks enforce this:
-  - a corrupted-future test: rebuild every decision with the future deleted or shuffled, and require bit-identical results;
-  - a unit test that plants a leak to prove the check catches one.
-- **PitSense-Bench v0.1.** 43,123 recorded decision points from 39 races (all of 2025 and 2026 so far), with what happened next. Two tasks so far:
-  - will this car pit within *k* laps?
-  - where will a car that just entered the pits rejoin?
-- **Baselines and first models**, scored race by race on 2026 with models trained only on earlier races.
-- **A live recorder** for this weekend's race at Sepang.
+```bash
+pitsense pitwall --year 2026 --race hungary --speed 20 --team ferrari   # replay with the dashboard
+pitsense pitwall --live --team ferrari                                  # live race (F1 TV sign-in)
+```
 
-Strategy simulation, backup plans and reacting rivals come next (see [Roadmap](#roadmap)).
+How a team uses it from day one: [docs/pitwall.md](docs/pitwall.md). How it is built, and the rules every engineer follows: [docs/ENGINEERING.md](docs/ENGINEERING.md).
+
+**Honest status.** Every number below is a backtest on the 2026 races, each scored with models trained only on races that finished before it. The live recorder has not yet been run against a real session, and box-call timing is still the weakest part. Run it in shadow mode (`pitsense shadow-score`) before trusting it.
 
 ---
 
@@ -112,7 +119,11 @@ bench/evaluate.py   expanding-window scoring → reports/leaderboard.md
 - **Tyre age is derived.** It's computed from the stint start, because the feed's own lap counter arrives about 2 s after the line and sometimes freezes mid-race.
 - **Red-flag pit-lane entries aren't stops.** Everyone goes in and tyres are changed for free, so they're excluded from the labels.
 
-## Validation against FastF1 (39 races, 43,856 laps)
+## Validation against FastF1
+
+All 188 races 2018–2026 are validated per season in [docs/data.md](docs/data.md). The 2025–26 detail is below.
+
+### 2025–26 (39 races, 43,856 laps)
 
 | Check | Match |
 |---|---|
@@ -129,81 +140,60 @@ The remaining differences come from timing, not parsing.
 
 Full per-race output: `reports/validation.txt`.
 
-## Benchmark results (v0.1)
+## Benchmark results
 
-**How it was scored:**
+**How it was scored:** the 15 races of 2026 are the test set. Each race is scored with models trained on every race from 2018 that finished before it started. Model settings were chosen on 2025 races only. 202,784 decision points from 188 races.
 
-- **Test set:** the 15 races of 2026, each scored with models trained on every race that finished before it started.
-- **Model settings:** chosen on 2025 races only.
-
-**Will this car pit within k laps?** (16,177 lap-end decisions, excluding cars that retire within 3 laps)
-
-| k | model | log loss ↓ | Brier ↓ | AUC ↑ | Brier skill vs base rate |
-|---|---|---|---|---|---|
-| 1 | `gbm_hazard` | **0.1182** | **0.0281** | **0.798** | **+5.7%** |
-| 1 | `tyre_age_logit` | 0.1311 | 0.0294 | 0.699 | +1.4% |
-| 1 | `base_rate` | 0.1375 | 0.0298 | 0.483 | 0 |
-| 3 | `gbm_hazard` | **0.2703** | **0.0758** | **0.759** | **+10.3%** |
-| 3 | `tyre_age_logit` | 0.2936 | 0.0810 | 0.697 | +4.2% |
-| 3 | `base_rate` | 0.3102 | 0.0845 | 0.483 | 0 |
-
-The probabilities are honest: when `gbm_hazard` says 10–20% for "pits next lap", it happened 13% of the time; at 2–5% it happened 4%. Calibration tables are in `reports/leaderboard.md`.
-
-History matters. When I trained on 2026 races alone (`pitsense bench build --year 2026`), `gbm_hazard` did *worse* than the base rate on k=3. Adding older seasons (the archive goes back to 2018) is the cheapest improvement available.
-
-**Where does a car rejoin after a stop?** (533 pit entries)
-
-| model | exact position | within one place | mean error |
+| Task | Best model | Score (2026) | Baseline |
 |---|---|---|---|
-| `rejoin_gbm` | **53.9%** | **86.3%** | **0.74** |
-| `gap_minus_pitloss` (broadcast-style pit window) | 49.9% | 79.2% | 0.99 |
-| `no_change` | 32.7% | 52.0% | 1.97 |
+| Car pits next lap | `gbm_hazard` | log loss 0.114, AUC 0.824 | 0.138 (base rate) |
+| Car pits within 3 laps | `gbm_hazard` | log loss 0.259, AUC 0.785 | 0.310 (base rate) |
+| Rejoin position after a stop | `pitstop_gbm` | 62.7% exact, 90.4% within one place | 51.4% / 85.9% (`rejoin_gbm`), 32.7% (no change) |
+| Time a stop costs, s | `pitstop_loss` | MAE 3.38 | 4.08 (v0.1 prior) |
+| Next lap time, s | `next_lap_gbm` | MAE 0.67 | 1.50 (last clean lap) |
+| Lap time 5 laps ahead, s | `lap5_gbm` | MAE 0.86 | 1.80 (last clean lap) |
+| Tyre cliff within 3 laps | `cliff_gbm` | AUC 0.81 | base rate |
+| Undercut by the car behind within 5 laps | `undercut_gbm` | AUC 0.84 | 0.78 (gap rule) |
+| Rain within 10 minutes | nowcast | log loss 0.079 | 0.186 (base rate); only 3 wet races in 2026 |
+| Finishing position at 25/50/75% distance | race simulator | RPS 0.050 | 0.072 (current position) |
+| Box calls within ±2 laps (top 5) | head of strategy | precision 0.28, recall 0.24 | weak; being improved |
 
-- **Failure case:** Azerbaijan 2026, where the whole field pitted under the safety car. The gap rule assumes nobody else stops, so it predicts big losses and scores 22%. Keeping the same position scores 86%.
-- **Next fix:** model the cars that pit together.
-
-**Pit loss:** each stop's time loss is measured against cars that stayed out on the same laps. It's combined with a per-circuit prior from the previous visit, with no future data used.
+Every engineer value goes into the benchmark rows, so the corrupted-future check (`pitsense leakcheck`) covers all of them. The simulator and calls have their own check (`pitsense strategy-leakcheck`). Full tables are in each engineer's doc.
 
 ## Add your own model
 
 Implement `fit(train_df, target)` and `predict(test_df)` (see `src/pitsense/bench/models.py`), add the class to `PIT_MODELS` or `REJOIN_MODELS`, then run `pitsense bench run`. Feature columns are listed in `NUMERIC_FEATURES` in `bench/features.py`. Labels start with `y_`.
 
-## Known limitations (v0.1)
+## Known limitations
 
-- **Pit loss under SC/VSC is noisy.** Laps are compared by lap number, but cars reach the same lap number at different times. The safety-car prior is too high.
-- **Lap 1 has no lap time live**, because the feed doesn't publish one.
-- **Penalties, damage and red-flag tyre strategy** aren't modelled yet.
-- **Data covers 2025–2026 only.** The archive goes back to 2018. `pitsense bench build --year 2018 ...` should work, but older seasons haven't been validated.
-- **The live recorder is untested against a real session** (see above).
+- **Live is untested.** The recorder and `pitsense pitwall --live` have not been run against a real session.
+- **Box-call timing is weak:** precision 0.28. Plans and finishing-order forecasts are better than the calls built on them.
+- **Wet races get no strategy call.** There is no intermediate or wet tyre model; only 3 wet races in 2026.
+- **Public timing only:** no fuel loads, tyre temperatures or car telemetry. PitSense is strongest on rivals, whom teams also see only through timing.
+- **Voice is unfinished.** The fine-tuned SmolLM2 voice and spoken audio are built but not yet trained: run `pitsense voice train --backend llm`.
+- **Safety cars are simplified:** at most one SC and one VSC per simulated future; lapped cars and blue flags are not modelled.
 
 ## Roadmap
 
-1. **Score each remaining 2026 race** as it happens: `pitsense fetch --year 2026` → `bench build` → `bench run`.
-2. **Live shadow mode.** Run the models on the recording during a race and post calls with timestamps before the outcome is known.
-3. **Strategy layer:**
-   - pace and tyre-wear tracking that updates every lap;
-   - a lap-by-lap race simulator that tests every plan against the same simulated futures;
-   - Plan A/B with triggers, plus the conditions under which the call flips.
-4. **New features:**
-   - rivals that react (each team's habit of covering an undercut);
-   - wet-to-dry and dry-to-wet calls (test races: Sepang, Singapore, Brazil);
-   - an explanation of why one plan beats another.
-5. **Open the benchmark.**
-   - Publish a data card.
-   - Run other open engines through it and publish the leaderboard.
+1. **Shadow mode at real races.** Record live, run `pitsense pitwall --follow`, then publish `pitsense shadow-score` after each race.
+2. **Better box calls.** Fix the simulator's stop-timing bias and calibrate opponents' stops with the models engineer.
+3. **A wet-weather strategy model.**
+4. **Open the benchmark.** Publish a data card and score other open strategy engines.
 
 ## Layout
 
 ```
 src/pitsense/
-  archive.py   download raw streams          events.py   EventLog, parsing, JSONL
-  merge.py     feed merge semantics          state.py    deterministic reducer
-  asof.py      as-of stores, leak guards     pitloss.py  pit-loss measurement, priors
-  live.py      recorder + recording loaders  views.py    timing tower text view
-  validate.py  FastF1 cross-check            cli.py      `pitsense` command
-  bench/       features, labels, history, dataset, models, metrics, evaluate, leakcheck
-tests/         synthetic race + unit tests, planted-leak test, integration test
-reports/       leaderboard.md, validation.txt (generated)
+  archive, events, merge, state      raw feed -> deterministic race state
+  asof, pitloss, validate, live      as-of stores, pit loss, FastF1 check, recorder
+  pitwall/                           engineers (tyre, pitstop, rivals, rules, weather, models,
+                                     strategy, head), PitWall orchestrator, runtime (live / replay)
+  web/                               dashboard (standard library, offline)
+  bench/                             features, labels, tasks, models, evaluation, leak check
+  voice/                             radio / brief composer, own SLM, fine-tune, guard, TTS
+  modelstore.py, registry.py, cli.py
+docs/                                ENGINEERING.md, data.md, models.md, pitwall.md, engineers/*.md
+tests/                               synthetic-feed tests, leak tests, parity tests
 ```
 
 ## Data and terms
