@@ -16,7 +16,6 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 
 from ..pitloss import LapIndex, measure_stop
 from .evaluate import EvalResult, evaluate_task
-from .features import feature_columns
 from .metrics import regression_scores
 from .tasks import Task
 
@@ -74,15 +73,18 @@ class PitstopRule:
 
 
 class PitstopGBM:
-    """Learns the correction to the engineer's rejoin position from its values and the base features."""
+    """Learns the correction to the engineer's rejoin position from the engineer's own values only.
+
+    Small and heavily regularised: on 2025 this beat adding the base features (which overfit ~600 rows).
+    """
 
     name = "pitstop_gbm"
 
     def fit(self, df, target):
-        self.cols = feature_columns() + [f"pitstop__{k}" for k in PS]
+        self.cols = [f"pitstop__{k}" for k in PS]
         self.model = HistGradientBoostingRegressor(
-            max_iter=200, learning_rate=0.05, max_leaf_nodes=15, min_samples_leaf=20,
-            l2_regularization=1.0, loss="absolute_error", random_state=0,
+            max_iter=80, learning_rate=0.05, max_leaf_nodes=6, min_samples_leaf=50,
+            l2_regularization=10.0, loss="absolute_error", random_state=0,
         )
         self.model.fit(df[self.cols].astype(float), df[target] - _base(df))
         return self
