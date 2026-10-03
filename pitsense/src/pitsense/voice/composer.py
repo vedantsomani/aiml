@@ -283,7 +283,76 @@ def answer(f: Facts, intent: str, target: str | None = None) -> str:
     raise ValueError(f"unknown intent {intent!r}")
 
 
+# ------------------------------------------------------------------ free-form questions
+# (regex, kind): the first match decides what is asked. Used as the template reference answer.
+FREE_KINDS = (
+    ("gap_ahead", r"(gap|how far|distance|interval).*(ahead|in front|front)|car (ahead|in front)|who.*(ahead|in front)"),
+    ("gap_behind", r"(gap|how far|distance|interval).*(behind|back)|car behind|who.*behind|who.*chasing"),
+    ("tyre", r"tyre|tire|compound|stint|set"),
+    ("loss", r"pit loss|stop cost|cost of (a )?stop|lose.*stop|time.*(pit|stop)"),
+    ("rejoin", r"rejoin|come out|where.*(box|pit|stop)|position after"),
+    ("rain", r"rain|weather|wet|crossover"),
+    ("left", r"laps? (left|to go|remaining)|how long|remaining"),
+    ("position", r"position|where are we|running order|what place"),
+    ("penalty", r"penalt|drive.?through"),
+    ("cliff", r"cliff|deg|wear|grip"),
+    ("undercut", r"undercut|threat"),
+    ("plan", r"plan a|plan b|plan|window|when.*(box|pit|stop)|strategy"),
+    ("why", r"why|reason|because"),
+    ("call", r"call|what.*(do|should)|box|stay"),
+)
+
+
+def free_kind(question: str) -> str | None:
+    q = question.lower()
+    for kind, rx in FREE_KINDS:
+        if re.search(rx, q):
+            return kind
+    return None
+
+
+def free(f: Facts, question: str) -> str:
+    """Template answer to a free-form question: route by keywords, answer only from the facts."""
+    who, kind = f.tla, free_kind(question)
+    no = _pick(f, 0, [f"I do not have that for {who}.", f"No data on that for {who} right now.", f"That is not available for {who}."])
+    if kind == "gap_ahead":
+        return answer(f, "gap", f.ahead.car) if f.ahead else no
+    if kind == "gap_behind":
+        return answer(f, "gap", f.behind.car) if f.behind else no
+    if kind == "tyre":
+        return answer(f, "tyre_age") if f.cmp else no
+    if kind == "loss":
+        return _pick(f, 0, [f"A stop costs {f.loss} seconds now.", f"The pit loss is {f.loss} seconds."]) if f.loss else no
+    if kind == "rejoin":
+        return _pick(f, 0, [f"A stop now rejoins P{f.rejoin}.", f"{who} would come out P{f.rejoin}."]) if f.rejoin is not None else no
+    if kind == "rain":
+        return _pick(f, 0, [f"Rain chance is {f.rain} percent.", f"We rate rain at {f.rain} percent."]) if f.rain is not None else no
+    if kind == "left":
+        return _pick(f, 0, [f"{f.left} laps to go.", f"There are {f.left} laps left."]) if f.left is not None else no
+    if kind == "position":
+        return _pick(f, 0, [f"{who} is P{f.pos}.", f"We are P{f.pos} on lap {f.lap}."]) if f.pos is not None and f.lap is not None else no
+    if kind == "penalty":
+        if f.pen:
+            return _pick(f, 0, [f"{who} has {f.pen} seconds of penalty to serve.", f"There is a {f.pen} second penalty pending."])
+        return "A drive-through is pending." if f.dt else _pick(f, 0, [f"No penalty pending for {who}.", f"{who} has no penalty to serve."])
+    if kind == "cliff":
+        if f.cliff is None:
+            return no
+        return f"The cliff risk is {f.cliff} percent" + (f" and the tyres lose {f.deg} seconds a lap." if f.deg else ".")
+    if kind == "undercut":
+        return _pick(f, 0, [f"The undercut threat is {f.uc} percent.", f"The car behind has a {f.uc} percent undercut chance."]) if f.uc is not None else no
+    if kind == "plan":
+        return answer(f, "pit_window") if "plan b" not in question.lower() else answer(f, "plan_b")
+    if kind == "why":
+        return answer(f, "why")
+    if kind == "call":
+        return _cap(action_phrase(f, 1)) + "."
+    return no
+
+
 def compose(f: Facts, task: str, target: str | None = None) -> str:
+    if task == "free":
+        return free(f, target or "")
     if task == "radio":
         return radio(f)
     if task == "brief":

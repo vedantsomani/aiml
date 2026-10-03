@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 INTENTS = ("gap", "tyre_age", "pit_window", "plan_b", "why")
-TASKS = ("radio", "brief") + tuple(f"ask_{i}" for i in INTENTS)
+TASKS = ("radio", "brief") + tuple(f"ask_{i}" for i in INTENTS) + ("free",)
 N_STYLE = 6
 COMPOUNDS = ("SOFT", "MEDIUM", "HARD", "INTERMEDIATE", "WET")
 ACTIONS = ("BOX", "STAY_OUT", "PREPARE_BOX", "BOX_IF_SC", "NO_CALL")
@@ -118,10 +118,10 @@ class Facts:
 
     # ------------------------------------------------------------------ text
     def text(self, task: str = "radio", target: str | None = None) -> str:
-        """The model input. ``task``: radio | brief | ask_<intent>; ``target`` is the car asked about (ask_gap)."""
+        """The model input. ``task``: radio | brief | ask_<intent>; ``target`` is the car asked about (ask_gap) or the question text (free)."""
         if task not in TASKS:
             raise ValueError(f"unknown task {task!r}")
-        head = task + (f" {target}" if target and task == "ask_gap" else "")
+        head = task + (f" {target}" if target and task in ("ask_gap", "free") else "")
         parts = [f"{head} S{''.join(str(s % 10) for s in self.style)}", f"ACT {self.action}", f"CAR {self.car} {self.tla}"]
 
         def add(tag, *vals):

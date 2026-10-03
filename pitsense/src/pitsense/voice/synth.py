@@ -158,6 +158,24 @@ def sample_call(v: dict, rng: random.Random) -> Call:
                 reasons=tuple(reasons), plan_a=plan_a, plan_b=plan_b)
 
 
+FREE_QUESTIONS = (
+    "how far is the car ahead", "what is the gap to the car in front", "who is ahead of us", "gap ahead please",
+    "how far is the car behind", "what is the gap behind", "who is chasing us", "gap to the car behind",
+    "what tyres are we on", "how old are the tyres", "what is the stint age", "which compound is on the car",
+    "what does a stop cost", "how much is the pit loss now", "how long would a stop take",
+    "where would we rejoin", "what position do we come out if we box", "where do we rejoin after a stop",
+    "what is the rain chance", "is rain coming", "how is the weather looking",
+    "how many laps are left", "laps to go", "how long until the end",
+    "what position are we in", "where are we running", "what place are we",
+    "do we have a penalty", "any penalty to serve", "is there a drive through pending",
+    "what is the cliff risk", "how are the tyres wearing", "what is the degradation",
+    "is the undercut a threat", "how big is the undercut threat",
+    "what is the plan", "when do we box", "what is the pit window", "what is plan b",
+    "why this call", "what is the reason for the call", "why are we boxing",
+    "what is the call", "what should we do", "do we box or stay out",
+)
+
+
 @dataclass(frozen=True)
 class Sample:
     race_id: str
@@ -169,7 +187,7 @@ class Sample:
     ask: str | None = None
 
 
-def samples_for_row(v: dict, tla_of: dict, k: int, seed: int = 0, alias: bool = False) -> list[Sample]:
+def samples_for_row(v: dict, tla_of: dict, k: int, seed: int = 0, alias: bool = False, free: bool = False) -> list[Sample]:
     """The radio, brief and two question samples for one real situation (call variant ``k``)."""
     rng = _rng(seed, v["race_id"], v["driver"], v["t"], k)
     v = augment(v, rng)
@@ -180,6 +198,8 @@ def samples_for_row(v: dict, tla_of: dict, k: int, seed: int = 0, alias: bool = 
     f = from_values(call, v, tla_of, style_for(call.car, v["t"], salt=f"{seed}-{k}"))
     out = []
     tasks = ["radio", "brief"] + [f"ask_{i}" for i in rng.sample(INTENTS, 2)]
+    if free:
+        tasks.append("free")
     for task in tasks:
         target = None
         if task == "ask_gap":
@@ -191,6 +211,8 @@ def samples_for_row(v: dict, tla_of: dict, k: int, seed: int = 0, alias: bool = 
                 target = rng.choice(sorted(others)) if others else None
             if target is None:
                 continue
+        if task == "free":
+            target = rng.choice(FREE_QUESTIONS)
         out.append(Sample(v["race_id"], task, f.text(task, target), composer.compose(f, task, target), f.action, f, target))
     return out
 
@@ -210,7 +232,7 @@ def load_situations(years=(2025, 2026), per_race: int | None = None, seed: int =
     return out
 
 
-def build(years, per_race, calls_per_row=1, seed=0, stay_keep=0.4, races=None, alias=0.0) -> list[Sample]:
+def build(years, per_race, calls_per_row=1, seed=0, stay_keep=0.4, races=None, alias=0.0, free=False) -> list[Sample]:
     """Samples for the given years (or race ids). STAY_OUT is the common call in real races, so
     only ``stay_keep`` of those situations are kept: the model must see the rare calls often."""
     out: list[Sample] = []
@@ -220,7 +242,7 @@ def build(years, per_race, calls_per_row=1, seed=0, stay_keep=0.4, races=None, a
             if races is not None and race_id not in races:
                 continue
             for k in range(calls_per_row):
-                ss = samples_for_row(v, tla_of, k, seed, _rng(seed, 'alias', race_id, v['driver'], v['t'], k).random() < alias)
+                ss = samples_for_row(v, tla_of, k, seed, _rng(seed, 'alias', race_id, v['driver'], v['t'], k).random() < alias, free)
                 if ss and ss[0].action == "STAY_OUT" and _rng(seed, "keep", race_id, v["driver"], v["t"], k).random() > stay_keep:
                     continue
                 out += ss
