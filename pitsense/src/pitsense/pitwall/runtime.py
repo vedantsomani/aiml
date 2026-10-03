@@ -38,6 +38,7 @@ log = logging.getLogger("pitsense.pitwall")
 
 PUBLISH_EVERY_S = 3.0  # session seconds between snapshots (wall seconds at 1x)
 MAX_SPEED_TICK_S = 30.0  # snapshot spacing when replaying as fast as possible
+LEAD_IN_S = 60.0  # replay starts pacing this long before the session start
 LOG_KEEP = 500  # calls and alerts kept in memory for the API
 
 
@@ -68,15 +69,22 @@ class ReplaySource(Source):
         self.start_utc = start_utc if start_utc is not None else (ref.start_utc if ref else None)
 
     def events(self, stop: threading.Event):
-        t0_wall, t0 = time.monotonic(), self.log.start
+        # the grid wait before the start is not paced: pacing begins LEAD_IN_S before the lights
+        t0 = self.log.start
+        for e in self.log.events:
+            if e.topic == "SessionStatus" and isinstance(e.data, dict) and e.data.get("Status") == "Started":
+                t0 = max(t0, e.t - LEAD_IN_S)
+                break
+        t0_wall = time.monotonic()
         for e in self.log.events:
             if stop.is_set():
                 return
-            if self.speed > 0:
-                delay = t0_wall + (e.t - t0) / self.speed - time.monotonic()
-                while delay > 0 and not stop.is_set():
-                    time.sleep(min(delay, 0.2))
+            if self.speed > 0 and e.t > t0:
+                while not stop.is_set():
                     delay = t0_wall + (e.t - t0) / self.speed - time.monotonic()
+                    if delay <= 0:
+                        break
+                    time.sleep(min(delay, 0.2))
             yield e
 
 
