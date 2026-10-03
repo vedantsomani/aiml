@@ -24,20 +24,28 @@ def focus_cars(ctx, state) -> list[str]:
 
 
 def get_analysis(ctx, memory, state, view) -> dict:
-    """Plans for the focus cars, cached on the context until a lap, the track status or a rule fact changes."""
+    """Plans for the focus cars. Each car's plan is refreshed when it completes a lap, the track status
+    changes, or one of its rule facts changes; otherwise the cached plan stands."""
     cars = [n for n in focus_cars(ctx, state) if n in state.drivers and state.drivers[n].running]
     rules = view.race("rules")
-    key = (
-        tuple((n, state.drivers[n].laps, bool(view.car("rules", n).get("must_stop")),
-               view.car("rules", n).get("penalty_s_pending")) for n in cars),
-        state.track_status, rules.get("sc_phase"), rules.get("pit_lane_open"),
-    )
-    hit = ctx.__dict__.get("_strategy_cache")
-    if hit is not None and hit[0] == key:
-        return hit[1]
-    res = analysis.analyse(state, view, ctx, memory, cars, light=len(cars) > 4)
-    ctx.__dict__["_strategy_cache"] = (key, res)
-    return res
+    glob = (state.track_status, rules.get("sc_phase"), rules.get("pit_lane_open"), len(cars) > 4)
+    cache = ctx.__dict__.setdefault("_strategy_cache", {})
+    out, todo = {}, []
+    for n in cars:
+        rl = view.car("rules", n)
+        key = (glob, state.drivers[n].laps, bool(rl.get("must_stop")), rl.get("penalty_s_pending"))
+        hit = cache.get(n)
+        if hit is not None and hit[0] == key:
+            out[n] = hit[1]
+        else:
+            todo.append((n, key))
+    if todo:
+        res = analysis.analyse(state, view, ctx, memory, [n for n, _ in todo], light=glob[3])
+        for n, key in todo:
+            if n in res:
+                cache[n] = (key, res[n])
+                out[n] = res[n]
+    return out
 
 
 def plan_text(stops) -> str:

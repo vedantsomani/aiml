@@ -45,7 +45,7 @@ def _pit_losses(F: FieldIn, D: Draws, stop: np.ndarray, c: int | None = None) ->
             ok = (li >= 0) & (li < R)
             lis = np.clip(li, 0, R - 1)
             st = np.take_along_axis(D.status, lis, 1)
-            amt = np.maximum(_loss_by_status(F, st) + F.loss["sd"] * np.where(st == 0, 1.0, 0.6) * D.z_pit[:, :, k] + off, 3.0)
+            amt = np.maximum(_loss_by_status(F, st) + F.loss["sd"] * np.where(st == 0, 1.0, 0.6) * D.z_pit[:, :, k] + off + PARAMS["stop_extra_s"], 3.0)
             np.add.at(loss, (sidx[ok], cidx[ok], lis[ok]), amt[ok])
         return loss
     P = stop.shape[0]
@@ -57,7 +57,7 @@ def _pit_losses(F: FieldIn, D: Draws, stop: np.ndarray, c: int | None = None) ->
         ok = (li >= 0) & (li < R)
         lis = np.clip(li, 0, R - 1)
         st = D.status[sidx, lis]
-        amt = np.maximum(_loss_by_status(F, st) + F.loss["sd"] * np.where(st == 0, 1.0, 0.6) * D.z_pit[None, :, c, k] + F.team_off[c], 3.0)
+        amt = np.maximum(_loss_by_status(F, st) + F.loss["sd"] * np.where(st == 0, 1.0, 0.6) * D.z_pit[None, :, c, k] + F.team_off[c] + PARAMS["stop_extra_s"], 3.0)
         np.add.at(loss, (pidx[ok], sidx[ok], lis[ok]), amt[ok])
     return loss
 

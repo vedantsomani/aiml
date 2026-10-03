@@ -34,17 +34,18 @@ PASS_TOP = 0.98  # pass chance when the car ahead is slowed by a stop
 
 # knobs fitted/tuned on 2025 (see docs/engineers/strategy.md)
 PARAMS = {
-    "level_sd": 0.25,  # s: uncertainty of a car's pace level
-    "noise_sd": 0.30,  # s: lap-to-lap noise
+    "level_sd": 0.10,  # s: uncertainty of a car's pace level
+    "noise_sd": 0.20,  # s: lap-to-lap noise
     "deg_sd": 0.20,  # log-sd of the degradation slope
-    "cliff_mult": 1.25,  # tyre cliff at this multiple of the typical stint
+    "cliff_mult": 1.7,  # tyre cliff at this multiple of the typical stint
     "cliff_sd": 0.18,
-    "cliff_slope": 0.7,  # s per lap beyond the cliff
+    "cliff_slope": 0.25,  # s per lap beyond the cliff
     "cliff_cap": 6.0,
-    "retire_rate": 0.0008,  # per car-lap
+    "retire_rate": 0.0003,  # per car-lap
     "sc_pull": 0.65,  # share of cars due to stop soon that come in under a safety car
     "vsc_pull": 0.30,
     "sc_pull_window": 14,
+    "stop_extra_s": 0.0,  # s added to every stop: traffic on rejoining, cold-tyre laps
     "hold_gain": 1.0,  # most a defending car can gain (s) per lap by holding a rival off
 }
 

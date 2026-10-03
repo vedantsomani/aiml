@@ -29,6 +29,7 @@ TASKS: list[str] = [
     "pitsense.bench.pitstop:pitstop_tasks",
     "pitsense.bench.rivals:rivals_tasks",
     "pitsense.bench.weather:weather_tasks",
+    "pitsense.bench.strategy:strategy_tasks",
 ]
 
 # Extra models for the core tasks (bench/tasks.py), scored next to the built-in ones.
