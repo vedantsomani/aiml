@@ -28,6 +28,7 @@ TASKS: list[str] = [
     "pitsense.bench.tyre:tyre_tasks",
     "pitsense.bench.pitstop:pitstop_tasks",
     "pitsense.bench.rivals:rivals_tasks",
+    "pitsense.bench.weather:weather_tasks",
 ]
 
 # Extra models for the core tasks (bench/tasks.py), scored next to the built-in ones.
@@ -45,6 +46,7 @@ LABELERS: list[str] = [
     "pitsense.bench.tyre:tyre_labels",
     "pitsense.bench.pitstop:pitstop_labels",
     "pitsense.bench.rivals:rivals_labels",
+    "pitsense.bench.weather:weather_labels",
 ]
 
 # CLI extensions: f(subparsers) -> None, adding `pitsense <command>` parsers (cli.py).
@@ -52,6 +54,7 @@ COMMANDS: list[str] = [
     "pitsense.bench.rules:add_commands",
     "pitsense.modelstore:add_commands",
     "pitsense.pitwall.runtime:add_commands",
+    "pitsense.bench.weather:add_commands",
 ]
 
 
