@@ -12,6 +12,9 @@ from .sim import (
 )
 
 
+SOFT_TAU_S = 4.0  # s: width of the smoothed position
+
+
 def _loss_by_status(F: FieldIn, status_lap: np.ndarray) -> np.ndarray:
     L = F.loss
     return np.where(status_lap == 2, L["sc"], np.where(status_lap == 1, L["vsc"], L["green"]))
@@ -117,7 +120,7 @@ def _finish(F: FieldIn, D: Draws, cum: np.ndarray, stop, comp) -> FieldRun:
 
 # --------------------------------------------------------------------------- the focus car's plans
 def evaluate_plans(F: FieldIn, D: Draws, run: FieldRun, c: int, stop_lap: np.ndarray, comp: np.ndarray, S_use: int | None = None):
-    """Finishing position [P,S] of car ``c`` under each plan, against the simulated opponents.
+    """(finishing position, finishing time) [P,S] of car ``c`` under each plan, against the simulated opponents.
 
     stop_lap [P,S,K] absolute in-laps (NOSTOP if none), comp [P,S,K] compound fitted at each stop. Uses the
     first ``S_use`` simulations. Each lap needs only the nearest opponents ahead and behind, found by a sorted search.
@@ -181,7 +184,10 @@ def evaluate_plans(F: FieldIn, D: Draws, run: FieldRun, c: int, stop_lap: np.nda
     fin[:, c] = PLACEHOLDER
     flat = (np.sort(fin, axis=1) + srow.T).ravel()
     pos = np.searchsorted(flat, (ours + srow).ravel()).reshape(Pn, S) - base_k + 1
-    return pos.astype(float)
+    # a smoothed position (each rival counts by how close the margin is): less noisy for comparing plans
+    x = np.clip((ours[:, :, None] - fin[None, :, :]) / SOFT_TAU_S, -30.0, 30.0)
+    soft = 1.0 + (1.0 / (1.0 + np.exp(-x))).sum(2) - 1.0 / (1.0 + np.exp(-np.clip((ours - PLACEHOLDER) / SOFT_TAU_S, -30, 30)))
+    return pos.astype(float), ours, soft
 
 
 class _Slice:

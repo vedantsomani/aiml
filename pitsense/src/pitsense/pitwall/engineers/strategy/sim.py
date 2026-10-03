@@ -85,6 +85,8 @@ class FieldIn:
     max_stint: float = 0.0  # regulation stint limit in laps (0 = none)
     reg_min_stops: int = 0
     ref_pace: float = 90.0
+    slots: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))  # random-number slot per car
+    n_slots: int = 0
 
     @property
     def R(self) -> int:
@@ -99,50 +101,59 @@ class Draws:
     """The random numbers of S simulated futures. Every plan and every car sees the same ones."""
 
     def __init__(self, F: FieldIn, S: int, seed: int, *, force_sc: tuple | None = None) -> None:
+        """Arrays are drawn for every driver slot and every lap of the race, then cut to the cars and laps
+        still to run, so the same seed gives the same futures lap after lap (calls do not flicker on noise)."""
         rng = np.random.default_rng(seed)
-        C, R = F.C, max(F.R, 1)
+        n, Rt, sl, A = F.n_slots, max(F.total, 1), F.slots, F.A
         P = PARAMS
         self.S = S
-        self.level = rng.normal(0, P["level_sd"], (S, C))
-        self.degmul = np.exp(rng.normal(0, P["deg_sd"], (S, C)))
-        self.noise = rng.normal(0, P["noise_sd"], (S, C, R))
-        self.u_stop = rng.random((S, C))
-        self.u_after = rng.random((S, C, K_STOPS))
-        self.u_open = rng.random((S, C, K_STOPS))
-        self.u_comp = rng.random((S, C, K_STOPS))
-        self.u_pull = rng.random((S, C))
-        self.u_pass = rng.random((S, C, R))
-        self.z_pit = rng.normal(0, 1, (S, C, K_STOPS))
-        self.z_cliff = rng.normal(0, 1, (S, C, 3))
-        self.u_cliff = rng.random((S, C, 2))
-        self.u_def = rng.random((S, R))
-        self.u_force = rng.random((S, C))
-        self.ret_lap = rng.geometric(max(P["retire_rate"], 1e-9), (S, C)) - 1  # lap index a car retires on
+        cut = lambda x: x[:, sl]  # noqa: E731
+        self.level = cut(rng.normal(0, P["level_sd"], (S, n)))
+        self.degmul = cut(np.exp(rng.normal(0, P["deg_sd"], (S, n))))
+        self.noise = rng.normal(0, P["noise_sd"], (S, n, Rt))[:, sl, A:Rt]
+        self.u_stop = cut(rng.random((S, n)))
+        self.u_after = cut(rng.random((S, n, K_STOPS)))
+        self.u_open = cut(rng.random((S, n, K_STOPS)))
+        self.u_comp = cut(rng.random((S, n, K_STOPS)))
+        self.u_pull = cut(rng.random((S, n)))
+        self.u_pass = rng.random((S, n, Rt))[:, sl, A:Rt]
+        self.z_pit = cut(rng.normal(0, 1, (S, n, K_STOPS)))
+        self.z_cliff = cut(rng.normal(0, 1, (S, n, 3)))
+        self.u_cliff = cut(rng.random((S, n, 2)))
+        self.u_def = rng.random((S, Rt))[:, A:Rt]
+        self.u_force = cut(rng.random((S, n)))
+        u_ret = cut(rng.random((S, n)))
+        self.ret_lap = np.floor(np.log(np.maximum(u_ret, 1e-12)) / np.log(1 - P["retire_rate"])).astype(np.int64)
+        self.u_sc = rng.random((S, 4))  # start, kind, length draws for the safety-car scenario
+        self.u_sc_lap = rng.random((S, 2, Rt))[:, :, A:Rt]  # per-lap start draws: VSC, SC
+        self.u_len = rng.random((S, 2))
         self.status, self.sc_start = self._status(F, rng, force_sc)
 
     def _status(self, F: FieldIn, rng, force_sc):
         """Track status per simulated lap: 0 green, 1 VSC, 2 SC. Also the first SC/VSC lap index (R if none)."""
         S, R = self.S, max(F.R, 1)
-        status = np.zeros((S, R), dtype=np.int8)
-        first = np.full(S, R, dtype=np.int64)
         idx = np.arange(R)[None, :]
+        u = np.clip(self.u_len, 1e-9, 1 - 1e-9)
+        poisson = lambda m, q: np.floor(-np.log(1 - q) * max(m - 1, 0.3)).astype(int)  # noqa: E731 (geometric-like length)
         if force_sc is not None:  # scenario: a safety car / VSC starting within the next few laps
             lo, hi, p_sc = force_sc
-            start = rng.integers(lo, hi + 1, S)
-            is_sc = rng.random(S) < p_sc
-            dur = np.where(is_sc, 1 + rng.poisson(max(F.sc_len - 1, 0.5), S), 1 + rng.poisson(max(F.vsc_len - 1, 0.3), S))
+            start = lo + np.minimum((self.u_sc[:, 0] * (hi - lo + 1)).astype(int), hi - lo)
+            is_sc = self.u_sc[:, 1] < p_sc
+            dur = np.where(is_sc, 1 + poisson(F.sc_len, u[:, 1]), 1 + poisson(F.vsc_len, u[:, 0]))
             on = (idx >= start[:, None]) & (idx < (start + dur)[:, None])
             status = np.where(on, np.where(is_sc, 2, 1)[:, None], 0).astype(np.int8)
             return status, np.minimum(start, R)
-        # one SC and one VSC at most, each with a per-lap start hazard; the SC wins where they overlap
-        for kind, rate, mean_len in ((1, F.vsc_rate, F.vsc_len), (2, F.sc_rate, F.sc_len)):
-            start = rng.geometric(min(max(rate, 1e-6), 0.99), S) - 1
-            dur = 1 + rng.poisson(max(mean_len - 1, 0.3), S)
+        status = np.zeros((S, R), dtype=np.int8)
+        first = np.full(S, R, dtype=np.int64)
+        for k, kind, rate, mean_len in ((0, 1, F.vsc_rate, F.vsc_len), (1, 2, F.sc_rate, F.sc_len)):
+            hit = self.u_sc_lap[:, k, :R] < rate
+            start = np.where(hit.any(1), hit.argmax(1), R)
+            dur = 1 + poisson(mean_len, u[:, k])
             on = (idx >= start[:, None]) & (idx < (start + dur)[:, None])
             status = np.where(on, kind, status).astype(np.int8)
-            first = np.where(start < R, np.minimum(first, start), first)
+            first = np.minimum(first, start)
         if F.sc_now:  # a safety car / VSC is out now: it covers the laps still to run
-            left = 1 + rng.poisson(max(F.sc_now_left - 1, 0.0), S)
+            left = 1 + poisson(F.sc_now_left + 1, u[:, 0])
             status = np.where(idx < left[:, None], F.sc_now, status).astype(np.int8)
             first = np.zeros(S, dtype=np.int64)
         return status, first

@@ -33,6 +33,8 @@ SETTINGS = {
     "prep_laps": 2,  # plan's first stop within this many laps -> PREPARE_BOX
     "gain_sc": 0.6,  # places gained by stopping under a safety car to call BOX_IF_SC
     "p_sc": 0.7,  # share of surprise neutralisations that are full safety cars
+    "w_time": 0.001,  # places per second of race time: breaks ties between plans with equal expected position
+    "tol_keep": 0.05,  # keep last lap's target stop lap unless the best plan is better by more than this
 }
 OFFS1 = (0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 17, 20, 24, 28, 33, 38, 44, 50, 58)
 OFFS2 = (0, 3, 6, 10, 15, 21, 27)
@@ -69,6 +71,8 @@ class PlanResult:
     pos_sd: float
     first_offset: int | None  # laps from the next lap to the first stop (0 = this lap)
     pos: np.ndarray | None = None  # per-simulation finishing positions (not exported)
+    util: float = 0.0  # expected position plus a small price on race time: breaks ties between equal positions
+    util_s: np.ndarray | None = None  # per-simulation utility
 
     def to_plan(self, name: str, trigger: str | None = None) -> Plan:
         return Plan(name, tuple(PlanStop(int(l), c) for l, c in self.stops), round(float(self.exp_pos), 2),
@@ -207,6 +211,10 @@ def build_field(state, view, memory, ctx, pri: Priors, A: int) -> tuple[FieldIn,
             done = [int(round(LIFE[c] * f)) for f in np.linspace(0.75, 1.3, 11)]
             opened = []
         F.stints.append((done, opened))
+    allnum = sorted(state.drivers, key=lambda x: (int(x) if x.isdigit() else 999, x))
+    slot = {n: i for i, n in enumerate(allnum)}
+    F.slots = np.array([slot[n] for n in names], dtype=np.int64)
+    F.n_slots = len(allnum)
     F.x0 -= F.x0.min() if C else 0.0
     return F, names, info
 
@@ -296,9 +304,10 @@ def _points(pos: np.ndarray) -> np.ndarray:
     return np.concatenate([POINTS, [0.0]])[idx]
 
 
-def _result(plan: tuple, pos: np.ndarray, A: int) -> PlanResult:
+def _result(plan: tuple, pos: np.ndarray, time: np.ndarray, soft: np.ndarray, A: int, tref: float) -> PlanResult:
+    u = soft + SETTINGS["w_time"] * (time - tref)
     return PlanResult(tuple((int(l), DRY[cj]) for l, cj in plan), float(pos.mean()), float(_points(pos).mean()),
-                      float(pos.std()), (plan[0][0] - (A + 1)) if plan else None, pos)
+                      float(pos.std()), (plan[0][0] - (A + 1)) if plan else None, pos, float(u.mean()), u)
 
 
 # --------------------------------------------------------------------------- one focus car
@@ -313,28 +322,29 @@ def analyse_focus(F: FieldIn, info: dict, run: FieldRun, D: Draws, number: str, 
         return out
     S1 = min(S1, D.S)
     stop, comp = _arrays(plans, S1)
-    pos1 = evaluate_plans(F, D, run, c, stop, comp, S1)
-    means = pos1.mean(1)
+    pos1, time1, soft1 = evaluate_plans(F, D, run, c, stop, comp, S1)
+    means = (soft1 + SETTINGS["w_time"] * (time1 - time1.mean())).mean(1)
     order = np.argsort(means, kind="stable")
     chosen = list(order[:keep])
     first = np.array([p[0][0] - (A + 1) if p else -1 for p in plans])
-    # make sure the options the call compares are on the full set: this lap, the next few, no stop, each stop count
-    for o in (0, 1, 2):
+    # keep the best plan for each of the next few stop laps, for no stop and for each stop count
+    for o in range(8):
         for i in order:
             if first[i] == o:
                 chosen.append(i)
                 break
     for n in (0, 1, 2, 3):
-        for i in order[:]:
+        for i in order:
             if len(plans[i]) == n:
-                chosen += [i]
+                chosen.append(i)
                 break
     chosen = sorted(set(int(i) for i in chosen), key=lambda i: means[i])
     sub = [plans[i] for i in chosen]
     stop, comp = _arrays(sub, D.S)
-    pos = evaluate_plans(F, D, run, c, stop, comp, D.S)
-    res = [_result(p, pos[i], A) for i, p in enumerate(sub)]
-    out.ranked = sorted(res, key=lambda r: (r.exp_pos, -r.exp_pts))
+    pos, time, soft = evaluate_plans(F, D, run, c, stop, comp, D.S)
+    tref = float(time.mean())
+    res = [_result(p, pos[i], time[i], soft[i], A, tref) for i, p in enumerate(sub)]
+    out.ranked = sorted(res, key=lambda r: (r.util, r.exp_pos))
     out.plan_a = out.ranked[0]
     now = [r for r in out.ranked if r.first_offset == 0]
     later = [r for r in out.ranked if r.first_offset is None or r.first_offset > 0]
@@ -343,7 +353,7 @@ def analyse_focus(F: FieldIn, info: dict, run: FieldRun, D: Draws, number: str, 
     ns = [r for r in out.ranked if not r.stops]
     out.nostop = ns[0] if ns else None
     if out.now_best is not None and out.later_best is not None:
-        d = out.now_best.pos - out.later_best.pos
+        d = out.now_best.util_s - out.later_best.util_s
         out.diff_now_later = (float(d.mean()), float(d.std() / math.sqrt(len(d))))
     return out
 
@@ -355,7 +365,7 @@ def sc_scenario(F: FieldIn, info: dict, number: str, ctx, plan_a: PlanResult, S_
     """
     c = F.cars.index(number)
     A, total = F.A, F.total
-    if F.R < 6 or F.sc_now:
+    if F.R < 10 or F.sc_now:
         return None, None, None, None
     DB = Draws(F, S_B, seed, force_sc=(0, 4, SETTINGS["p_sc"]))
     runB = simulate_field(F, DB)
@@ -375,12 +385,13 @@ def sc_scenario(F: FieldIn, info: dict, number: str, ctx, plan_a: PlanResult, S_
         use = (rem > 1.1 * F.life[j]) & (second > l0 + 5) & ~late
         stop[1 + j, :, 1] = np.where(use, second, NOSTOP)
         comp[1 + j, :, 1] = np.where(rem - gap > F.life[1], 2, 1)
-    pos = evaluate_plans(F, DB, runB, c, stop, comp, S_B)
-    mean = pos.mean(1)
+    pos, time, soft = evaluate_plans(F, DB, runB, c, stop, comp, S_B)
+    mean = (soft + SETTINGS["w_time"] * (time - time.mean())).mean(1)
+    posm = pos.mean(1)
     best = 1 + int(np.argmin(mean[1:]))
-    gain = float(mean[0] - mean[best])
+    gain = float(posm[0] - posm[best])
     stops_txt = (int(l0.mean().round()), DRY[best - 1])
-    res = PlanResult(((stops_txt[0], DRY[best - 1]),), float(mean[best]), float(_points(pos[best]).mean()), float(pos[best].std()), 0, pos[best])
+    res = PlanResult(((stops_txt[0], DRY[best - 1]),), float(posm[best]), float(_points(pos[best]).mean()), float(pos[best].std()), 0, pos[best])
     trigger = f"SC/VSC within 5 laps: box that lap for {DRY[best - 1]}"
     return res, trigger, gain, DRY[best - 1]
 
@@ -415,7 +426,7 @@ def analyse(state, view, ctx, memory, cars: list[str], *, S: int | None = None, 
             for n in group:
                 out[n] = CarAnalysis(n, False, "race is over", anchor=A)
             continue
-        seed = seed_for(ctx, group[0], A, str(state.track_status))
+        seed = seed_for(ctx, "", 0)
         D = Draws(F, S, seed)
         run = simulate_field(F, D)
         for n in group:
@@ -424,7 +435,7 @@ def analyse(state, view, ctx, memory, cars: list[str], *, S: int | None = None, 
                 continue
             a = analyse_focus(F, info, run, D, n, ctx, S1, 8 if light else st["keep"])
             if a.ok and not light:
-                sc = sc_scenario(F, info, n, ctx, a.plan_a, min(st["S_B"], S), seed_for(ctx, n, A, "sc"))
+                sc = sc_scenario(F, info, n, ctx, a.plan_a, min(st["S_B"], S), seed_for(ctx, "", 0, "sc"))
                 a.plan_b, a.plan_b_trigger, a.gain_sc, a.sc_best_comp = sc
             a.sc_prob5 = 1 - (1 - min(0.5, F.sc_rate + F.vsc_rate)) ** 5
             a.n_sims = S

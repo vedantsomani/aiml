@@ -29,31 +29,36 @@ def _phi(z: float) -> float:
     return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
 
 
-def decide(a, prev: str | None, *, pit_open: bool = True, sc_phase: str = "none") -> tuple[str, str | None, float, str]:
-    """(action, compound, confidence, rule) from one car's analysis and its call on the previous lap."""
+def pick_plan(a, prev_target: int | None):
+    """Plan A: the best plan, unless last lap's target stop lap is still nearly as good (hysteresis)."""
+    best = a.ranked[0]
+    if prev_target is not None and prev_target > a.anchor:
+        cand = next((r for r in a.ranked if r.stops and r.stops[0][0] == prev_target), None)
+        if cand is not None and cand.util - best.util <= SETTINGS["tol_keep"]:
+            return cand
+    return best
+
+
+def decide(a, prev_target: int | None, *, pit_open: bool = True, sc_phase: str = "none"):
+    """(action, compound, confidence, rule, plan A) for one car's analysis and last lap's target stop lap."""
     S = SETTINGS
-    A = a.plan_a
-    if A is None:
-        return "NO_CALL", None, 0.0, "no_plan"
-    cost_now = (a.now_best.exp_pos - A.exp_pos) if a.now_best is not None else math.inf
-    tol = S["tol_box"] * (2.0 if prev == "BOX" else 1.0)
+    if a.plan_a is None or not a.ranked:
+        return "NO_CALL", None, 0.0, "no_plan", None
+    A = pick_plan(a, prev_target)
     d, se = a.diff_now_later if a.diff_now_later else (0.0, 0.5)
     se = max(se, 0.03)
-    prep_window = S["prep_laps"] + (2 if prev in ("PREPARE_BOX", "BOX") else 0)
-    comp = A.stops[0][1] if A.stops else None
-    if not A.stops and cost_now > tol:
-        return "STAY_OUT", None, min(0.97, max(0.5, _phi(d / se))), "no_stop_needed"
-    if cost_now <= tol:
-        c = a.now_best.stops[0][1]
-        conf = min(0.97, max(0.5, _phi(-d / se)))
+    if not A.stops:
+        return "STAY_OUT", None, min(0.97, max(0.5, _phi(d / se))), "no_stop_needed", A
+    comp = A.stops[0][1]
+    if A.first_offset == 0:
         if not pit_open:
-            return "PREPARE_BOX", c, conf, "pit_lane_closed"
-        return "BOX", c, conf, "box_now"
-    if A.first_offset is not None and A.first_offset <= prep_window:
-        return "PREPARE_BOX", comp, min(0.95, max(0.5, _phi(d / se))), "stop_soon"
-    if a.gain_sc is not None and a.gain_sc >= S["gain_sc"] and sc_phase == "none" and A.stops:
-        return "BOX_IF_SC", a.sc_best_comp, min(0.9, 0.5 + 0.2 * a.gain_sc), "sc_gain"
-    return "STAY_OUT", None, min(0.97, max(0.5, _phi(d / se))), "stay"
+            return "PREPARE_BOX", comp, 0.6, "pit_lane_closed", A
+        return "BOX", comp, min(0.97, max(0.5, _phi(-d / se))), "box_now", A
+    if A.first_offset <= S["prep_laps"]:
+        return "PREPARE_BOX", comp, min(0.95, max(0.5, _phi(d / se))), "stop_soon", A
+    if a.gain_sc is not None and a.gain_sc >= S["gain_sc"] and sc_phase == "none":
+        return "BOX_IF_SC", a.sc_best_comp, min(0.9, 0.5 + 0.2 * a.gain_sc), "sc_gain", A
+    return "STAY_OUT", None, min(0.97, max(0.5, _phi(d / se))), "stay", A
 
 
 class HeadOfStrategy(Engineer):
@@ -63,7 +68,7 @@ class HeadOfStrategy(Engineer):
 
     def __init__(self, ctx, memory) -> None:
         super().__init__(ctx, memory)
-        self._hist: dict[str, tuple[int, str | None, str | None]] = {}  # car -> (lap, action, action before)
+        self._hist: dict[str, tuple[int, int | None, int | None]] = {}  # car -> (lap, target stop lap, target before)
 
     def calls(self, state, view):
         cars = [n for n in focus_cars(self.ctx, state) if state.drivers.get(n) is not None and state.drivers[n].running]
@@ -79,32 +84,35 @@ class HeadOfStrategy(Engineer):
                 why = a.why if a is not None else "no plan"
                 out.append(Call(t=t, car=n, action="NO_CALL", reasons=(Reason("no_plan", why),)))
                 continue
-            lap0, act0, before = self._hist.get(n, (None, None, None))
-            prev_action = before if lap0 == d.laps else act0  # the call on the previous lap
-            action, comp, conf, rule = decide(a, prev_action, pit_open=rules.get("pit_lane_open") is not False,
-                                              sc_phase=str(rules.get("sc_phase") or "none"))
-            self._hist[n] = (d.laps, action, before if lap0 == d.laps else act0)
-            reasons = self._reasons(n, a, action, rule, view, rules, weather, state)
+            lap0, tgt0, before = self._hist.get(n, (None, None, None))
+            prev_target = before if lap0 == d.laps else tgt0  # target stop lap decided on the previous lap
+            action, comp, conf, rule, chosen = decide(a, prev_target, pit_open=rules.get("pit_lane_open") is not False,
+                                                      sc_phase=str(rules.get("sc_phase") or "none"))
+            target = chosen.stops[0][0] if chosen is not None and chosen.stops else None
+            self._hist[n] = (d.laps, target, before if lap0 == d.laps else tgt0)
+            if chosen is None:
+                out.append(Call(t=t, car=n, action="NO_CALL", reasons=(Reason("no_plan", "no plan could be ranked"),)))
+                continue
+            reasons = self._reasons(n, a, chosen, action, rule, view, rules, weather, state)
             rain = weather.get("rain_prob_10min")
             if isinstance(rain, (int, float)) and rain >= 0.4 or weather.get("crossover") not in (None, "none"):
                 conf *= 0.8
             if d.laps < 8:
                 conf *= 0.85
-            plan_a = a.plan_a.to_plan("A")
+            plan_a = chosen.to_plan("A")
             plan_b = None
             if a.plan_b is not None:
                 plan_b = a.plan_b.to_plan("B", a.plan_b_trigger)
             elif a.ranked:
-                alt = next((r for r in a.ranked if r.stops != a.plan_a.stops and r.first_offset != a.plan_a.first_offset), None)
+                alt = next((r for r in a.ranked if r.stops != chosen.stops and r.first_offset != chosen.first_offset), None)
                 if alt is not None:
                     plan_b = alt.to_plan("B", "if Plan A cannot be followed")
             out.append(Call(t=t, car=n, action=action, compound=comp if action != "STAY_OUT" else None,
                             confidence=round(conf, 2), reasons=tuple(reasons), plan_a=plan_a, plan_b=plan_b))
         return out
 
-    def _reasons(self, n, a, action, rule, view, rules, weather, state) -> list[Reason]:
+    def _reasons(self, n, a, A, action, rule, view, rules, weather, state) -> list[Reason]:
         r: list[Reason] = []
-        A = a.plan_a
         phase = str(rules.get("sc_phase") or "none")
         pit = view.race("pitstop")
         tyre, riv, rl, ps = view.car("tyre", n), view.car("rivals", n), view.car("rules", n), view.car("pitstop", n)
