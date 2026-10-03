@@ -96,7 +96,7 @@ def radio(f: Facts) -> str:
     who = f.tla
     lead = _pick(f, 0, [f"{who},", f"Copy {who},", f"{who}, listen,", f"OK {who},", f"Radio for {who},", f"{who}, strategy,"])
     act = action_phrase(f, 1)
-    clause = reason_clause(f, 0)
+    clause = reason_clause(f, 0) if f.action != "NO_CALL" else None
     seps = [", {r}", " - {r}", ", because {r}", ". {R}", ", {r}", " as {r}"]
     forms = []
     if clause:
@@ -156,7 +156,7 @@ def brief(f: Facts) -> str:
     sents.append(s1)
     # 2: the call
     act = action_phrase(f, 2)
-    clause = reason_clause(f, 0, 4)
+    clause = reason_clause(f, 0, 4) if f.action != "NO_CALL" else None
     lead = _pick(f, 3, ["Our call: ", "The call: ", "We say: ", "Strategy says: ", "Call: ", "Decision: "])
     s2 = _cap(act) if f.action == "NO_CALL" else lead + act
     if clause:
@@ -176,8 +176,8 @@ def brief(f: Facts) -> str:
     elif f.rejoin is not None:
         n3.append(f"a stop now rejoins P{f.rejoin}")
     if n3:
-        j = _pick(f, 5, [". ", "; ", ". ", "; ", ". ", "; "])
-        s3 = (_cap(n3[0]) + j + (n3[1] if j == "; " else _cap(n3[1]))) if len(n3) > 1 else _cap(n3[0])
+        j = _pick(f, 5, ["; ", ", and ", "; "])
+        s3 = _cap(n3[0]) + (j + n3[1] if len(n3) > 1 else "")
         sents.append(s3)
     # 4: plan, penalty, weather
     n4 = []
@@ -200,7 +200,7 @@ def brief(f: Facts) -> str:
     if n4:
         k = f.style[5] % 3
         take = n4[: 1 + k % 2] if len(n4) > 1 else n4
-        sents.append(". ".join(_cap(x) for x in take))
+        sents.append(_cap(take[0]) + (_pick(f, 2, ["; ", ", and "]) + take[1] if len(take) > 1 else ""))
     if len(sents) > 4:
         sents = sents[:4]
     return " ".join(s.rstrip(".") + "." for s in sents)
@@ -296,8 +296,8 @@ def compose(f: Facts, task: str, target: str | None = None) -> str:
 # ------------------------------------------------------------------ what a text says (used by the guard)
 _SC = r"(?:safety car|sc|vsc)"
 _STATE_RES = (
-    ("NO_CALL", re.compile(r"\bno (?:strategy )?call\b|\bnothing to call\b")),
-    ("BOX_IF_SC", re.compile(rf"box (?:if|on) (?:the |a )?{_SC}|if (?:we get a |the )?{_SC}[^,.]*, box|{_SC}, then box", re.I)),
+    ("NO_CALL", re.compile(r"\bno (?:strategy )?call\b|\bnothing to call\b", re.I)),
+    ("BOX_IF_SC", re.compile(rf"\bbox (?:if|on) (?:the |a )?{_SC}\b|\bif (?:we get a |the )?{_SC}\b[^,.]*, box\b|\b{_SC}, then box\b", re.I)),
     ("PREPARE_BOX", re.compile(r"\b(?:prepare to|get ready to|stand by to|be ready to|expect the) box\b", re.I)),
     ("STAY_OUT", re.compile(r"\bstay out\b|\bkeep going, no stop\b|\bstay on track, no stop\b|\bremain out\b|\bhold position\b", re.I)),
     ("BOX", re.compile(r"\bbox, box\b|\bbox this lap\b|\bpit this lap\b|\bcome in at the end\b|\bwe box now\b|\bin this lap\b|\bboxes this lap\b|\bcomes in this lap\b|\bbox on lap\b|\bbox now\b|\bstopping on lap\b", re.I)),

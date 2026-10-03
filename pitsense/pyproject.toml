@@ -20,6 +20,8 @@ dependencies = [
 [project.optional-dependencies]
 # FastF1 is only needed to record live sessions and to cross-check our reconstruction.
 live = ["fastf1>=3.8,<3.9"]
+# Our own voice model (src/pitsense/voice) trains and runs on PyTorch; without it the voice uses its template composer.
+slm = ["torch>=2.9"]
 dev = ["pytest>=8", "fastf1>=3.8,<3.9"]
 
 [project.scripts]
