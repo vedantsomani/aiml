@@ -38,12 +38,24 @@ RACING = 1.07  # a clean lap slower than this times the reference isn't racing p
 RACING_RANK = 5  # the reference: the field's 5th-fastest clean lap so far
 
 
+# cliff_risk: logistic on age / typical life, race fraction, free air, pace residuals and the set's
+# excess wear. Coefficients fitted on the 2025 season's labels (bench ``y_cliff_3``) only.
+LIFE = {"SOFT": 18.0, "MEDIUM": 28.0, "HARD": 38.0}  # typical stint length, laps
+CLIFF_B = (-5.98, 0.14, 1.29, 0.56, 0.48, 0.48, 1.61)  # intercept, age, frac, free, resid_trend, resid_last, net
+
+
+def _clip(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
+
+
 def _r(x: float | None, nd: int = 3) -> float | None:
     return None if x is None or not math.isfinite(x) else round(float(x), nd)
 
 
 class TyreEngineer(Engineer):
     name = "tyre"
+    features = ("pace_s", "deg_s_per_lap", "fuel_s_per_lap", "cliff_risk", "pace_sd_s", "resid_trend_s",
+                "fresh_soft_s", "fresh_medium_s", "fresh_hard_s")
 
     def __init__(self, ctx, memory) -> None:
         super().__init__(ctx, memory)
@@ -126,6 +138,7 @@ class TyreEngineer(Engineer):
         if d is None:
             return {}
         self._note(d)
+
         laps = self.memory.index.by_driver.get(number, {})
         last = laps.get(d.laps)
         key = (self._ff_version, d.laps, getattr(last, "lap_time", None), getattr(last, "lap_time_inferred", None),
@@ -134,7 +147,9 @@ class TyreEngineer(Engineer):
         if hit is None or hit[0] != key:
             hit = (key, self._compute(d, laps))
             self._cache[number] = hit
-        return dict(hit[1])
+        out = dict(hit[1])
+        out["cliff_risk"] = self._cliff(state, d, out)
+        return out
 
     def _compute(self, d, laps: dict) -> dict:
         stint_times = [x.lap_time for k, x in sorted(laps.items()) if k > d.stint_start_lap and is_clean(x)]
@@ -185,6 +200,21 @@ class TyreEngineer(Engineer):
             # pit at the end of the next lap: out-lap L+2, first flying lap L+3 at age 2
             out[f"fresh_{comp.lower()}_s"] = _r(expected(fit, ff, pri, j, ff.net[j], 2, L + 3) + pri.first_lap)
         return out
+
+    def _cliff(self, state, d, out: dict) -> float | None:
+        """Probability the tyres lose >= 1 s/lap within 3 laps (see ``CLIFF_B``)."""
+        c = CI.get(d.compound or "")
+        deg = out["deg_s_per_lap"]
+        if not state.total_laps or c is None or deg is None or d.tyre_age is None:
+            return None
+        free = 5.0 if d.position == 1 or d.interval is None else d.interval
+        trend, last = out["resid_trend_s"], out["resid_last_s"]
+        b = CLIFF_B
+        z = (b[0] + b[1] * _clip(d.tyre_age / LIFE[DRY[c]], 0, 2) + b[2] * _clip(d.laps / state.total_laps, 0, 1)
+             + b[3] * _clip(free, 0, 3) + b[4] * _clip(trend if trend is not None else 0.0, -1, 1)
+             + b[5] * _clip(last if last is not None else 0.0, -2, 2)
+             + b[6] * _clip(deg - self._ff.fuel, -0.1, 0.2))
+        return _r(1 / (1 + math.exp(-z)), 4)
 
     def race(self, state, view):
         ff = self._ff

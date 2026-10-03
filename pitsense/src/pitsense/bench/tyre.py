@@ -36,6 +36,7 @@ CLIFF_S = 1.0  # sudden loss that counts as falling off, s/lap
 CLIFF_LAPS = 3  # horizon of the cliff label
 FREE_AIR_S = 1.0  # a lap started closer than this to the car ahead may be held up
 MIN_FIELD = 5  # cars needed to measure the field's common change
+RACING = 1.25  # a green-flag lap slower than this times the race's median clean lap is neutralised, not racing
 
 
 def _clean(x: LapRecord | None) -> bool:
@@ -54,6 +55,12 @@ class _Race:
         for pe in final.pit_events:  # every pit entry, red flag included: tyres may change
             self.stops.setdefault(pe.driver, []).append(pe.in_lap)
         self._common: dict[tuple[int, int], float | None] = {}
+        times = [x.lap_time for x in final.laps if _clean(x)]
+        self.limit = RACING * median(times) if times else float("inf")
+
+    def clean(self, x: LapRecord | None) -> bool:
+        """A clean lap that is also racing pace (some neutralised laps are published under green)."""
+        return _clean(x) and x.lap_time <= self.limit
 
     def same_set(self, drv: str, a: int, b: int) -> bool:
         """Laps a..b (a <= b) were driven on one set: no stop ended a lap in [a, b-1]."""
@@ -66,7 +73,7 @@ class _Race:
         for k in range(L, max(1, L - back), -1):
             if not self.same_set(drv, k, L):
                 break
-            if _clean(laps.get(k)):
+            if self.clean(laps.get(k)):
                 vals.append(laps[k].lap_time)
             if len(vals) == n:
                 break
@@ -79,7 +86,7 @@ class _Race:
             deltas = []
             for drv, laps in self.laps.items():
                 x = laps.get(j)
-                if not _clean(x) or not self.same_set(drv, L - 2, j):
+                if not self.clean(x) or not self.same_set(drv, L - 2, j):
                     continue
                 r = self.ref(drv, L, back=3)
                 if r is not None:
@@ -100,7 +107,7 @@ class _Race:
         for j in range(L + 1, L + CLIFF_LAPS + 2):
             x = laps.get(j)
             c = self.common(L, j)
-            if not _clean(x) or not self.same_set(drv, L, j) or c is None:
+            if not self.clean(x) or not self.same_set(drv, L, j) or c is None:
                 break
             flags.append(x.lap_time - r - c >= CLIFF_S and self.free_air(drv, j))
         for k in range(min(CLIFF_LAPS, len(flags) - 1)):
@@ -113,7 +120,7 @@ class _Race:
         laps = self.laps.get(drv, {})
         if not self.same_set(drv, L, L + h):
             return float("nan")
-        if not all(_clean(laps.get(L + k)) for k in range(1, h + 1)):
+        if not all(self.clean(laps.get(L + k)) for k in range(1, h + 1)):
             return float("nan")
         return float(laps[L + h].lap_time)
 
@@ -128,7 +135,7 @@ class _Race:
         compound = last.compound or ""
         new_set = last.tyre_age is not None and last.tyre_age == last.lap - pe.in_lap
         x = laps.get(pe.in_lap + 2)
-        if not new_set or compound not in DRY_COMPOUNDS or not _clean(x) or pe.in_lap + 2 > end:
+        if not new_set or compound not in DRY_COMPOUNDS or not self.clean(x) or pe.in_lap + 2 > end:
             return float("nan"), compound
         return float(x.lap_time), compound
 
