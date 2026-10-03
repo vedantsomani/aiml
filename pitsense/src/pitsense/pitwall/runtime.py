@@ -242,6 +242,8 @@ class PitWallRuntime:
         self._last_pub_t: float | None = None
         self._last_pub_lap = -1
         self._last_calls: dict[str, tuple] = {}
+        self.radio: dict[str, dict] = {}  # car -> latest radio message from the voice
+        self.voice = None if os.environ.get("PITSENSE_VOICE", "") != "off" else False  # loaded on first call
         self._seen_alerts: set[tuple] = set()
         self._wall_t0 = time.time()
         self._log_fh = None
@@ -363,7 +365,8 @@ class PitWallRuntime:
             return None
         d = snap.to_dict()
         d["extra"] = self._extra(state)
-        self._log_changes(state, d)
+        self._log_changes(state, d, snap)
+        d["extra"]["radio"] = dict(self.radio)
         payload = _json_bytes(d)
         ms = (time.perf_counter() - t0) * 1000
         self.snap_ms.append(ms)
@@ -388,7 +391,27 @@ class PitWallRuntime:
             "team": self.team.team, "wall_time": time.time(),
         }
 
-    def _log_changes(self, state: RaceState, d: dict) -> None:
+    def _say(self, snap: Snapshot, car: str) -> str | None:
+        """The voice's radio message for car's current call (None if the voice is off or fails)."""
+        if self.voice is False:
+            return None
+        try:
+            if self.voice is None:
+                from ..voice.api import Voice
+
+                self.voice = Voice()
+            call = next((c for c in snap.calls if c.car == car), None)
+            if call is None or call.action == "NO_CALL":
+                return None
+            from ..voice.api import say
+
+            return say(call, snap, self.voice)
+        except Exception:
+            log.exception("voice failed; continuing without it")
+            self.voice = False
+            return None
+
+    def _log_changes(self, state: RaceState, d: dict, snap: Snapshot | None = None) -> None:
         wall = round(time.time(), 3)
         for c in d["calls"]:
             key = _call_key(c)
@@ -399,6 +422,10 @@ class PitWallRuntime:
             car = state.drivers.get(c["car"])
             rec = {"kind": "call", "t": c["t"], "wall": wall, "lap": state.current_lap,
                    "car_lap": (car.laps + 1) if car else None, **{k: v for k, v in c.items() if k not in ("t",)}}
+            radio = self._say(snap, c["car"]) if snap is not None else None
+            if radio:
+                rec["radio"] = radio
+                self.radio[c["car"]] = {"text": radio, "lap": state.current_lap, "action": c["action"]}
             self._record(rec, self.calls_log)
         for a in d["alerts"]:
             key = (a["engineer"], a["code"], a.get("car"), a.get("since"))

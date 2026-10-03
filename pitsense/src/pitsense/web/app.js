@@ -96,9 +96,40 @@ function planHtml(p, label) {
   return "<div><b>Plan " + esc(p.name || label) + "</b> " + stops + ex + tr + "</div>";
 }
 
+// ---- radio: the voice engineer's message for each car's latest call (spoken by the browser if enabled)
+let radioOn = false;
+try { radioOn = localStorage.getItem("pitsense.radio") === "1"; } catch (e) {}
+const spoken = {};
+function radioHtml(s, n) {
+  const r = ((s.extra || {}).radio || {})[n];
+  return r ? '<div class="radio">&#128251; <i>"' + esc(r.text) + '"</i> <span class="kv">lap ' + esc(r.lap) + "</span></div>" : "";
+}
+function speakRadio(s, cars) {
+  const all = (s.extra || {}).radio || {};
+  for (const n of cars) {
+    const r = all[n];
+    if (!r || spoken[n] === r.text) continue;
+    const first = spoken[n] === undefined;
+    spoken[n] = r.text;
+    if (first || !radioOn || !window.speechSynthesis) continue;  // don't read out the backlog on connect
+    const u = new SpeechSynthesisUtterance(r.text);
+    u.rate = 1.05;
+    window.speechSynthesis.speak(u);
+  }
+}
+function flipRadio(btn) {
+  radioOn = !radioOn;
+  try { localStorage.setItem("pitsense.radio", radioOn ? "1" : "0"); } catch (e) {}
+  btn.textContent = radioOn ? "radio on" : "radio off";
+}
+function radioToggle() {
+  return '<button id="radiobtn" onclick="flipRadio(this)">' + (radioOn ? "radio on" : "radio off") + "</button>";
+}
+
 function renderFocus(s) {
   const mine = [...focusSet()];
-  $("focusnote").textContent = (s.focus || []).length ? (s.extra.team || "") : "no team set: pin cars from the tower";
+  speakRadio(s, mine);
+  $("focusnote").innerHTML = esc((s.focus || []).length ? (s.extra.team || "") : "no team set: pin cars from the tower") + " " + radioToggle();
   if (!mine.length) { $("focus").innerHTML = '<div class="empty">Start with --team, or click a car in the tower.</div>'; return; }
   const row = {}, calls = {};
   for (const r of s.tower) row[r.car] = r;
@@ -111,7 +142,7 @@ function renderFocus(s) {
     const plans = c ? planHtml(c.plan_a, "A") + planHtml(c.plan_b, "B") : "";
     return '<div class="card"><div class="top"><b>' + esc(r.tla || n) + '</b><span class="kv">#' + esc(n) + "</span>" +
       '<span class="kv">P<span>' + (r.position == null ? "-" : r.position) + "</span></span>" + tyre(r.compound, r.tyre_age) +
-      action(c ? c.action : "NO_CALL", true) + comp + conf + "</div>" + reasons +
+      action(c ? c.action : "NO_CALL", true) + comp + conf + "</div>" + radioHtml(s, n) + reasons +
       '<div class="plan">' + plans + "</div>" +
       '<div class="kv"><span>box now &rarr; ' + (v.pitstop__rejoin_if_box_now != null ? "P" + Math.round(v.pitstop__rejoin_if_box_now) : "--") + "</span>" +
       "<span>deg " + num(v.tyre__deg_s_per_lap, 3) + " s/lap</span><span>cliff " + pct(v.tyre__cliff_risk) + "</span>" +
