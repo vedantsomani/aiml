@@ -27,11 +27,12 @@ TASKS: list[str] = [
     "pitsense.bench.tasks:core_tasks",
     "pitsense.bench.tyre:tyre_tasks",
     "pitsense.bench.pitstop:pitstop_tasks",
+    "pitsense.bench.rivals:rivals_tasks",
 ]
 
 # Extra models for the core tasks (bench/tasks.py), scored next to the built-in ones.
 TASK_MODELS: dict[str, list[str]] = {
-    "pit_within": [],  # every pit_within_k task
+    "pit_within": [f"pitsense.bench.rivals:{n}" for n in ("RivalsPit", "RivalsPrior", "RivalsLogit", "RivalsLogitNoTeam", "RivalsGBM", "RivalsGBMNoTeam", "RivalsBlend")],  # every pit_within_k task
     "position_after_stop": [
         "pitsense.bench.pitstop:PitstopRule",
         "pitsense.bench.pitstop:PitstopGBM",
@@ -43,6 +44,7 @@ LABELERS: list[str] = [
     "pitsense.bench.labels:pit_labels",
     "pitsense.bench.tyre:tyre_labels",
     "pitsense.bench.pitstop:pitstop_labels",
+    "pitsense.bench.rivals:rivals_labels",
 ]
 
 # CLI extensions: f(subparsers) -> None, adding `pitsense <command>` parsers (cli.py).
