@@ -30,7 +30,7 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import events as _events  # the runtime feeds the wall; engineers never see the log
+from .. import events as _events  # the feeder: reads the log; exempt by name in tests/test_pitwall.py
 from ..state import RaceState
 from .types import Snapshot, TeamConfig
 
