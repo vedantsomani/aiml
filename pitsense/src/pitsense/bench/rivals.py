@@ -23,7 +23,6 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from ..state import RaceState
-from .features import NUMERIC_FEATURES
 from .models import BaseRate
 from .tasks import Task
 
@@ -31,7 +30,7 @@ UC_HORIZON = 5
 UC_SETTLE = 3  # laps after the later stop at which positions are compared
 TEAM_COLS = ("rivals__team_cover_rate", "rivals__cover")
 SIGNAL_COLS = ("sc", "vsc", "ahead_pit", "behind_pit", "mate_pit", "cover", "cliff", "must", "stuck",
-               "threat", "stops")
+               "threat", "stops", "rem", "ratio")
 
 
 # ----------------------------------------------------------------------------- labels
@@ -158,23 +157,22 @@ class RivalsLogitNoTeam(_Logit):
     team = False
 
 
-TYRE_COLS = ("tyre__pace_s", "tyre__deg_s_per_lap", "tyre__cliff_risk", "tyre__fresh_soft_s",
-             "tyre__fresh_medium_s", "tyre__fresh_hard_s")
-
-
-def _rivals_cols(df: pd.DataFrame) -> list[str]:
-    skip = {"rivals__ahead", "rivals__behind"}
-    return [c for c in df.columns if c.startswith("rivals__") and c not in skip and not c.startswith("rivals__lp_")]
+# inputs of the learned models (chosen on 2025): the core situation, the engineer's pit probabilities and signals
+BASE_COLS = ("tyre_age", "laps_in_stint", "race_frac", "laps_remaining", "must_stop", "sc", "vsc", "position",
+             "interval_ahead", "gap_behind", "n_pitted_recent", "ahead_pitted_recent", "behind_pitted_recent",
+             "pit_stops", "cmp_soft", "cmp_medium", "cmp_hard")
+RIVAL_COLS = ("rivals__pit_prob_1", "rivals__pit_prob_3", "rivals__pit_prob_5", "rivals__ratio", "rivals__mate_pit",
+              "tyre__cliff_risk", "tyre__deg_s_per_lap")
 
 
 class _GBM:
     name = ""
-    drop: tuple[str, ...] = ()
-    params = dict(max_iter=150, learning_rate=0.03, max_leaf_nodes=8, min_samples_leaf=200,
+    team = True
+    params = dict(max_iter=300, learning_rate=0.015, max_leaf_nodes=8, min_samples_leaf=300,
                   l2_regularization=10.0, random_state=0)
 
     def _cols(self, df):
-        return NUMERIC_FEATURES + [c for c in _rivals_cols(df) if c not in self.drop] + list(TYRE_COLS)
+        return list(BASE_COLS + RIVAL_COLS + (TEAM_COLS if self.team else ()))
 
     def fit(self, df, target):
         self.cols = self._cols(df)
@@ -186,14 +184,16 @@ class _GBM:
 
 
 class RivalsGBM(_GBM):
-    """Boosted trees on the base features, the tyre engineer's keys and every rivals key."""
+    """Boosted trees on the core situation, the tyre engineer's keys and the rivals' probabilities and signals."""
 
     name = "rivals_gbm"
 
 
 class RivalsGBMNoTeam(_GBM):
+    """The same without the team-habit columns (ablation)."""
+
     name = "rivals_gbm_noteam"
-    drop = TEAM_COLS
+    team = False
 
 
 class RivalsBlend:
@@ -252,11 +252,16 @@ class GapLogit:
 
 
 class UndercutGBM(_GBM):
-    """Boosted trees on the base features and every rivals / tyre key."""
+    """Boosted trees on the core situation plus margins, gaps and pit probabilities."""
 
     name = "undercut_gbm"
     params = dict(max_iter=150, learning_rate=0.03, max_leaf_nodes=6, min_samples_leaf=150,
                   l2_regularization=10.0, random_state=0)
+    extra = ("rivals__uc_margin_threat", "rivals__uc_first_threat", "rivals__gap_behind", "behind_tyre_age",
+             "pit_loss_now", "rivals__team_cover_rate")
+
+    def _cols(self, df):
+        return list(BASE_COLS + RIVAL_COLS + self.extra)
 
 
 UC_MODELS = (BaseRate, GapLogit, RivalsThreat, UndercutGBM)

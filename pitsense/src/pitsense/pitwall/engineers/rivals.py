@@ -43,18 +43,18 @@ SHRINK_CIRCUIT = 6.0  # pseudo-stints pulling a circuit's hazard toward all circ
 SHRINK_POOL = 5.0  # pseudo-stints pulling all circuits toward the default life
 SHRINK_TEAM = 12.0  # pseudo-opportunities pulling a team's cover rate toward the field's
 FEATS = ("lp", "sc", "vsc", "ahead_pit", "behind_pit", "mate_pit", "cover", "cliff", "late", "must",
-         "stuck", "threat", "stops")
+         "stuck", "threat", "stops", "rem", "ratio")
 
 # logistic on FEATS, per horizon (intercept first). Fitted on 2025 labels.
-PIT_B: dict[int, tuple[float, ...]] = {  # fitted on the 2025 season from round 8 (the history prior needs races to exist)
-    1: (-1.188, 0.552, -0.5, -0.532, 0.514, 0.493, 0.837, 0.017, 0.068, -1.575, -0.211, -0.207, 0.095, -0.812),
-    3: (-0.381, 0.622, -0.559, -0.766, 0.361, 0.256, 0.441, 0.05, 0.131, -2.178, -0.279, -0.222, 0.095, -0.837),
-    5: (-0.111, 0.651, -0.496, 0.215, 0.298, 0.118, 0.195, 0.026, -0.031, -1.746, -0.243, -0.216, 0.066, -0.828),
+PIT_B: dict[int, tuple[float, ...]] = {  # fitted on the 2025 season, history prior from the other 2025 races
+    1: (-3.392, 0.406, 0.938, -0.447, 0.456, 0.469, 0.651, -0.036, -0.045, -1.859, 0.095, -0.125, 0.104, -0.324, 0.837, 0.819),
+    3: (-2.66, 0.421, 0.156, -0.744, 0.337, 0.337, 0.24, -0.024, 0.017, -2.345, 0.308, -0.163, 0.093, -0.186, 0.813, 0.742),
+    5: (-2.356, 0.402, 0.098, 0.007, 0.265, 0.207, 0.081, -0.001, -0.081, -1.922, 0.371, -0.181, 0.067, -0.179, 0.825, 0.759),
 }
 # undercut success given the chaser stops first: intercept, margin (s), defender team's cover rate
 UC_B = (-0.293, 0.319, -1.778)
 # calibration of 'attacker stops first within UC_HORIZON': a + b * logit(raw)
-FIRST_B = (-0.257, 1.071)
+FIRST_B = (-0.543, 0.989)
 
 
 def _logit(p: float) -> float:
@@ -88,11 +88,11 @@ class _Stints:
         self.done.sort()
         self.open.sort()
 
-    def count(self, a: int, k: int) -> tuple[int, int]:
-        """(stops within (a, a+k], stints at risk)."""
+    def lap(self, j: int) -> tuple[int, int]:
+        """(stints that ended with a stop on their j-th lap, stints that reached their j-th lap)."""
         d, o = self.done, self.open
-        ev = bisect.bisect_right(d, a + k) - bisect.bisect_right(d, a)
-        risk = (len(d) - bisect.bisect_right(d, a)) + (len(o) - bisect.bisect_left(o, a + k))
+        ev = bisect.bisect_right(d, j) - bisect.bisect_left(d, j)
+        risk = (len(d) - bisect.bisect_left(d, j)) + (len(o) - bisect.bisect_left(o, j))
         return ev, risk
 
 
@@ -187,18 +187,21 @@ class RivalsEngineer(Engineer):
         (s.done if ended else s.open).append(int(length))
 
     def prior_hazard(self, compound: str | None, age: int, k: int) -> float:
-        """P(stint ends within k laps | it has lasted ``age`` laps), from earlier races."""
+        """P(stint ends within k laps | it has lasted ``age`` laps): per-lap hazards from earlier races
+        (circuit shrunk to all circuits shrunk to a default life), compounded over the k laps."""
         comp = compound or "UNKNOWN"
-        p = _default_p(comp, age, k)
-        pool = self._pool.get(comp)
-        if pool is not None:
-            ev, risk = pool.count(age, k)
-            p = (ev + SHRINK_POOL * p) / (risk + SHRINK_POOL)
-        circ = self._circ.get(comp)
-        if circ is not None:
-            ev, risk = circ.count(age, k)
-            p = (ev + SHRINK_CIRCUIT * p) / (risk + SHRINK_CIRCUIT)
-        return min(0.98, max(0.005, p))
+        pool, circ = self._pool.get(comp), self._circ.get(comp)
+        stay = 1.0
+        for j in range(age + 1, age + k + 1):
+            h = _default_p(comp, j - 1, 1)
+            if pool is not None:
+                ev, risk = pool.lap(j)
+                h = (ev + SHRINK_POOL * h) / (risk + SHRINK_POOL)
+            if circ is not None:
+                ev, risk = circ.lap(j)
+                h = (ev + SHRINK_CIRCUIT * h) / (risk + SHRINK_CIRCUIT)
+            stay *= 1.0 - min(0.9, h)
+        return min(0.98, max(0.005, 1.0 - stay))
 
     def team_cover_rate(self, team: str) -> float:
         n, c = self._teams.get(team, (0, 0))
@@ -257,6 +260,8 @@ class RivalsEngineer(Engineer):
             "stuck": int(gap_a is not None and gap_a < 1.2),
             "threat": int(gap_b is not None and gap_b < 1.5),
             "stops": d.pit_stops,
+            "rem": min(remaining, 40) / 40.0 if remaining is not None else 0.5,
+            "ratio": min(2.0, age / self._typical.get(d.compound or "", LIFE.get(d.compound or "", 25.0))),
         }
         sig = {"d": d, "ahead": ahead, "behind": behind, "age": age, "in_stint": in_stint, "remaining": remaining,
                "x": x, "cover_rate": cover_rate, "gap_a": gap_a, "gap_b": gap_b}
@@ -347,7 +352,7 @@ class RivalsEngineer(Engineer):
             "team_cover_rate": _r(sig["cover_rate"], 4),
         }
         xs = pit[3][2]
-        for f in ("sc", "vsc", "ahead_pit", "behind_pit", "mate_pit", "cover", "cliff", "must", "stuck", "threat", "stops"):
+        for f in ("sc", "vsc", "ahead_pit", "behind_pit", "mate_pit", "cover", "cliff", "must", "stuck", "threat", "stops", "rem", "ratio"):
             out[f] = _r(float(xs[f]), 4)
         out["lp_1"], out["lp_3"], out["lp_5"] = (_r(pit[k][2]["lp"], 4) for k in HORIZONS)
         return out
