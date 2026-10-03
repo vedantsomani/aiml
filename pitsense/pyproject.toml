@@ -21,7 +21,8 @@ dependencies = [
 # FastF1 is only needed to record live sessions and to cross-check our reconstruction.
 live = ["fastf1>=3.8,<3.9"]
 # Our own voice model (src/pitsense/voice) trains and runs on PyTorch; without it the voice uses its template composer.
-slm = ["torch>=2.9"]
+slm = ["torch>=2.9", "transformers>=4.50", "peft>=0.14", "accelerate>=1.0"]  # scratch model needs torch only; the fine-tuned LLM the rest
+tts = ["piper-tts>=1.3"]  # spoken audio, offline; voice file: see voice/tts.py
 dev = ["pytest>=8", "fastf1>=3.8,<3.9"]
 
 [project.scripts]

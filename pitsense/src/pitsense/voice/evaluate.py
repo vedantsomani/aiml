@@ -1,9 +1,9 @@
-"""Score the voice on held-out 2026 situations, against the template baseline.
+"""Score the voice on held-out 2026 situations: template, from-scratch model, fine-tuned LLM.
 
     pitsense voice eval [--n 150] [--out reports/voice_eval.json]
 
-Measures: fact errors before the guard, action stated correctly before and after the
-guard, length limits, wording diversity, fallback rate, latency (GPU and CPU), size.
+Measures, per task: fact errors before the guard, fallback rate, action stated correctly
+before and after the guard, length limits, wording diversity, latency (GPU and CPU), size.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import composer, guard, synth
 from .api import Voice
-from .train import model_dir, test_set
+from .train import SEED, test_set
 
 
 def _distinct(texts: list[str]) -> dict:
@@ -57,9 +57,7 @@ def _score(samples, outputs, served, fallbacks) -> dict:
 def _latency(voice: Voice, device: str, items, reps: int) -> dict:
     import torch
 
-    if voice.model is not None:
-        voice.model.to(device)
-        voice.device = device
+    voice.backends[0].to(device)
     out = {}
     for task in ("radio", "brief"):
         its = [it for it in items if it[1] == task][:reps]
@@ -78,43 +76,34 @@ def _latency(voice: Voice, device: str, items, reps: int) -> dict:
     return out
 
 
-def evaluate(path=None, n_rows: int = 150, out: Path | None = None, log=print) -> dict:
-    voice = Voice(path)
-    if not voice.has_model:
-        raise SystemExit("no trained voice model: run `pitsense voice train` first")
+def _one(kind: str, path, test, items, free_items, log) -> dict | None:
     import torch
 
-    test = test_set(n_rows)
-    log(f"held-out 2026 samples: {len(test)} from {len({s.race_id for s in test})} races")
-    items = [(s.facts, s.task, s.ask) for s in test]
+    voice = Voice(path, model=kind)
+    if not voice.has_model:
+        log(f"{kind}: not available (not trained, or packages/base model missing); skipped")
+        return None
+    be = voice.backends[0]
     t = time.time()
     results = voice.write_many(items)
-    log(f"generated {len(results)} messages in {time.time() - t:.0f} s")
+    log(f"{kind}: generated {len(results)} messages in {time.time() - t:.0f} s")
     outputs = [r.raw if r.fallback else r.text for r in results]
     served = [r.text for r in results]
     fallbacks = [r.fallback for r in results]
-    slm = _score(test, outputs, served, fallbacks)
-    tmpl_out = [s.target for s in test]
-    base = _score(test, tmpl_out, tmpl_out, [False] * len(test))
-    div = {}
-    for task in ("radio", "brief"):
-        ix = [i for i, s in enumerate(test) if s.task == task]
-        div[task] = {"slm": _distinct([served[i] for i in ix]), "template": _distinct([tmpl_out[i] for i in ix])}
-    sizes = {"params_million": round(voice.model.n_params() / 1e6, 2), "weights_mb": round((model_dir(path) / "model.pt").stat().st_size / 1e6, 1)}
-    lat_items = [(s.facts, s.task, s.ask) for s in test]
-    latency = {"template_us": round(1e6 * _time_template(lat_items), 1)}
+    rep = {"tasks": _score(test, outputs, served, fallbacks), "overall_fallback_rate": round(sum(fallbacks) / len(fallbacks), 4),
+           "fallback_reasons": dict(Counter(e.split()[0] for r in results if r.fallback for e in r.errors))}
+    rep["diversity"] = {task: _distinct([served[i] for i, s in enumerate(test) if s.task == task]) for task in ("radio", "brief")}
+    if free_items:
+        fs = [s for s, _ in free_items]
+        fr = voice.write_many([it for _, it in free_items])
+        rep["free_form"] = _score(fs, [r.raw if r.fallback else r.text for r in fr], [r.text for r in fr], [r.fallback for r in fr])["free"]
+    rep["model"] = {"params_million": round(be.n_params() / 1e6, 1)}
+    lat = {}
     if torch.cuda.is_available():
-        latency["gpu"] = _latency(voice, "cuda", lat_items, 40)
-    latency["cpu"] = _latency(voice, "cpu", lat_items, 15)
-    report = {"slm": slm, "template_baseline": base, "diversity": div, "model": sizes, "latency": latency,
-              "overall_fallback_rate": round(sum(fallbacks) / len(fallbacks), 4),
-              "fallback_reasons": dict(Counter(e.split()[0] for r in results if r.fallback for e in r.errors)),
-              "test_races": sorted({s.race_id for s in test})}
-    out = Path(out) if out else None
-    if out:
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(report, indent=1), encoding="utf-8")
-    return report
+        lat["gpu"] = _latency(voice, "cuda", items, 30)
+    lat["cpu"] = _latency(voice, "cpu", items, 8)
+    rep["latency"] = lat
+    return rep
 
 
 def _time_template(items) -> float:
@@ -124,9 +113,37 @@ def _time_template(items) -> float:
     return (time.perf_counter() - t) / min(500, len(items))
 
 
+def evaluate(path=None, n_rows: int = 150, out: Path | None = None, log=print, backends=("scratch", "llm")) -> dict:
+    test = test_set(n_rows)
+    log(f"held-out 2026 samples: {len(test)} from {len({s.race_id for s in test})} races")
+    items = [(s.facts, s.task, s.ask) for s in test]
+    tmpl = [s.target for s in test]
+    free = [s for s in synth.build((2025, 2026), n_rows, 1, SEED, races={s.race_id for s in test}, free=True) if s.task == "free"]
+    report = {"test_races": sorted({s.race_id for s in test}),
+              "template": {"tasks": _score(test, tmpl, tmpl, [False] * len(test)),
+                           "latency_us": round(1e6 * _time_template(items), 1),
+                           "diversity": {t: _distinct([tmpl[i] for i, s in enumerate(test) if s.task == t]) for t in ("radio", "brief")},
+                           "free_form": _score(free, [s.target for s in free], [s.target for s in free], [False] * len(free))["free"]}}
+    free_items = [(s, (s.facts, "free", s.ask)) for s in free]
+    for kind in backends:
+        r = _one(kind, path, test, items, free_items if kind == "llm" else [], log)
+        if r:
+            report[kind] = r
+    out = Path(out) if out else None
+    if out:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(report, indent=1), encoding="utf-8")
+    return report
+
+
 def show(rep: dict, log=print) -> None:
-    for task, r in rep["slm"].items():
-        log(f"{task:14s} " + "  ".join(f"{k}={v}" for k, v in r.items() if k != "n"))
-    log(f"overall fallback {rep['overall_fallback_rate']}  reasons {rep['fallback_reasons']}")
-    log(f"diversity {json.dumps(rep['diversity'])}")
-    log(f"model {rep['model']}  latency {json.dumps(rep['latency'])}")
+    for kind in ("scratch", "llm"):
+        r = rep.get(kind)
+        if not r:
+            continue
+        log(f"== {kind}  fallback {r['overall_fallback_rate']}  {r['fallback_reasons']}")
+        for task, x in r["tasks"].items():
+            log(f"{task:14s} " + "  ".join(f"{k}={v}" for k, v in x.items() if k != "n"))
+        if "free_form" in r:
+            log(f"free_form      {r['free_form']}")
+        log(f"diversity {json.dumps(r['diversity'])}  model {r['model']}  latency {json.dumps(r['latency'])}")

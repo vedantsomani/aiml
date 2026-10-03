@@ -8,9 +8,14 @@ from .facts import INTENTS, TASKS
 
 
 def cmd_train(a) -> None:
+    if a.backend == "llm":
+        from .llm import train_llm
+
+        train_llm(out=a.out, base=a.base, n_samples=a.samples, epochs=a.epochs or 1)
+        return
     from .train import train
 
-    train(out=a.out, epochs=a.epochs, per_race=a.per_race, calls=a.calls, d=a.d, layers=a.layers, heads=a.heads)
+    train(out=a.out, epochs=a.epochs or 4, per_race=a.per_race, calls=a.calls, d=a.d, layers=a.layers, heads=a.heads)
 
 
 def cmd_eval(a) -> None:
@@ -30,7 +35,7 @@ def cmd_say(a) -> None:
     from .api import Voice
     from .facts import from_values, style_for
 
-    voice = Voice(a.model, use_model=not a.template)
+    voice = Voice(a.model, model="template" if a.template else a.backend)
     sit = synth.load_situations((a.year,), None, 0)
     ids = [r for r in sit if a.race.lower() in r]
     if len(ids) != 1:
@@ -51,6 +56,10 @@ def cmd_say(a) -> None:
     print(f"input  {f.text(task, a.target)}")
     print(f"source {r.source}" + (f"  (model output failed the guard: {', '.join(r.errors)})" if r.fallback else ""))
     print(r.text)
+    if a.audio:
+        from .tts import speak
+
+        print(f"audio  {speak(r.text, a.audio if a.audio != 'auto' else None)}")
 
 
 def add_commands(sub) -> None:
@@ -58,7 +67,10 @@ def add_commands(sub) -> None:
     vs = p.add_subparsers(dest="voice_cmd", required=True)
     t = vs.add_parser("train", help="train the model from scratch on the template corpus (needs torch, uses the GPU)")
     t.add_argument("--out", help="folder (default: data/models/voice)")
-    t.add_argument("--epochs", type=int, default=4)
+    t.add_argument("--backend", choices=("scratch", "llm"), default="scratch", help="scratch: our own transformer; llm: LoRA fine-tune of SmolLM2-360M-Instruct (needs transformers, peft)")
+    t.add_argument("--base", default="HuggingFaceTB/SmolLM2-360M-Instruct", help="llm: base model id (or Qwen/Qwen2.5-0.5B-Instruct)")
+    t.add_argument("--samples", type=int, default=30000, help="llm: training samples")
+    t.add_argument("--epochs", type=int, default=None)
     t.add_argument("--per-race", type=int, default=1000, help="situations sampled per 2025 race")
     t.add_argument("--calls", type=int, default=3, help="sampled calls per situation")
     t.add_argument("--d", type=int, default=512)
@@ -78,5 +90,7 @@ def add_commands(sub) -> None:
     s.add_argument("--task", default="radio", help=f"radio | brief | {' | '.join(INTENTS)}")
     s.add_argument("--target", help="for the gap question: the other car's number")
     s.add_argument("--model", help="model folder")
+    s.add_argument("--backend", choices=("auto", "llm", "scratch"), default="auto", help="auto: fine-tuned LLM, then scratch model, whichever is trained")
     s.add_argument("--template", action="store_true", help="template composer only")
+    s.add_argument("--audio", nargs="?", const="auto", help="also speak it (Piper); optional wav path")
     s.set_defaults(fn=cmd_say)

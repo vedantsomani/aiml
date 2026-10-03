@@ -292,7 +292,7 @@ FREE_KINDS = (
     ("loss", r"pit loss|stop cost|cost of (a )?stop|lose.*stop|time.*(pit|stop)"),
     ("rejoin", r"rejoin|come out|where.*(box|pit|stop)|position after"),
     ("rain", r"rain|weather|wet|crossover"),
-    ("left", r"laps? (left|to go|remaining)|how long|remaining"),
+    ("left", r"laps?.*(left|to go|remaining)|how long|remaining"),
     ("position", r"position|where are we|running order|what place"),
     ("penalty", r"penalt|drive.?through"),
     ("cliff", r"cliff|deg|wear|grip"),

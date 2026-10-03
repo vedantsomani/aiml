@@ -24,43 +24,38 @@ class Result:
     raw: str | None = None  # what the model wrote, if it failed
 
 
-class Voice:
-    """The model (if available) plus the guard and the template fallback."""
+class ScratchBackend:
+    """The from-scratch transformer (slm.py + our own tokenizer)."""
 
-    def __init__(self, path: str | Path | None = None, device: str | None = None, use_model: bool = True):
-        self.model = self.tok = None
-        self.device = device
-        if use_model and os.environ.get("PITSENSE_VOICE", "") != "template":
-            self._load(path, device)
+    name = "scratch"
 
-    @property
-    def has_model(self) -> bool:
-        return self.model is not None
-
-    def _load(self, path, device) -> None:
-        try:
-            import torch
-
-            from .slm import Config, VoiceLM
-            from .tokenizer import Tokenizer
-            from .train import model_dir
-        except ImportError:
-            return
-        d = model_dir(path)
-        if not all((d / f).exists() for f in ("model.pt", "tokenizer.json", "meta.json")):
-            return
+    def __init__(self, path=None, device: str | None = None):
         import json
 
-        meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+        import torch
+
+        from .slm import Config, VoiceLM
+        from .tokenizer import Tokenizer
+        from .train import model_dir
+
+        d = model_dir(path)
+        if not all((d / f).exists() for f in ("model.pt", "tokenizer.json", "meta.json")):
+            raise FileNotFoundError(f"no scratch voice model in {d}")
+        self.meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.tok = Tokenizer.load(d / "tokenizer.json")
-        m = VoiceLM(Config(**meta["config"]))
+        m = VoiceLM(Config(**self.meta["config"]))
         m.load_state_dict(torch.load(d / "model.pt", map_location="cpu", weights_only=True))
         self.model = m.to(self.device).eval()
-        self.meta = meta
 
-    # ------------------------------------------------------------------ writing
-    def _decode(self, inputs: list[str]) -> list[str]:
+    def n_params(self) -> int:
+        return self.model.n_params()
+
+    def to(self, device: str) -> None:
+        self.device = device
+        self.model.to(device)
+
+    def decode(self, inputs: list[str]) -> list[str]:
         from .slm import BOS, SEP
 
         prompts = [[BOS, *self.tok.encode(t), SEP] for t in inputs]
@@ -72,19 +67,68 @@ class Voice:
                 outs[i] = self.tok.decode(ids).strip()
         return outs
 
+
+def _load(kind: str, path, device):
+    try:
+        if kind == "llm":
+            from .llm import LLMBackend
+
+            return LLMBackend(path, device)
+        return ScratchBackend(path, device)
+    except Exception:  # missing torch/transformers/peft, no weights, base model not cached
+        return None
+
+
+class Voice:
+    """Model backends (best first), the guard, and the template fallback.
+
+    ``model``: "auto" (fine-tuned LLM, then the scratch model, whichever are installed and
+    trained), "llm", "scratch", or "template". Each message tries the backends in order; the
+    first whose output passes the guard is used, else the template composer.
+    """
+
+    ORDER = {"auto": ("llm", "scratch"), "llm": ("llm",), "scratch": ("scratch",), "template": ()}
+
+    def __init__(self, path: str | Path | None = None, device: str | None = None, model: str = "auto", use_model: bool = True):
+        if os.environ.get("PITSENSE_VOICE", "") == "template" or not use_model:
+            model = "template"
+        if model not in self.ORDER:
+            raise ValueError(f"model must be one of {tuple(self.ORDER)}")
+        self.backends = [b for b in (_load(k, path, device) for k in self.ORDER[model]) if b is not None]
+
+    @property
+    def has_model(self) -> bool:
+        return bool(self.backends)
+
+    @property
+    def model(self):  # the first backend (what `n_params` etc. refer to)
+        return self.backends[0].model if self.backends else None
+
     def write_many(self, items: list[tuple[Facts, str, str | None]]) -> list[Result]:
         """items: (facts, task, target) -> results, in the same order."""
         inputs = [f.text(task, target) for f, task, target in items]
-        raws = self._decode(inputs) if self.model is not None else [None] * len(items)
-        out = []
-        for (f, task, target), inp, raw in zip(items, inputs, raws):
-            ref = composer.compose(f, task, target)
-            if raw is None:
-                out.append(Result(ref, "template", False))
-                continue
-            why = guard.check(task, inp, raw, f.action)
-            out.append(Result(raw, "slm", False) if not why else Result(ref, "template", True, tuple(why), raw))
-        return out
+        res: list[Result | None] = [None] * len(items)
+        first_raw: dict[int, tuple[str, tuple]] = {}
+        pending = list(range(len(items)))
+        for be in self.backends:
+            if not pending:
+                break
+            raws = be.decode([inputs[i] for i in pending])
+            still = []
+            for i, raw in zip(pending, raws):
+                f, task, _ = items[i]
+                why = guard.check(task, inputs[i], raw, f.action)
+                if not why:
+                    res[i] = Result(raw, be.name, False)
+                else:
+                    first_raw.setdefault(i, (raw, tuple(why)))
+                    still.append(i)
+            pending = still
+        for i in pending:
+            f, task, target = items[i]
+            raw, why = first_raw.get(i, (None, ()))
+            res[i] = Result(composer.compose(f, task, target), "template", raw is not None, why, raw)
+        return res  # type: ignore[return-value]
 
     def write(self, f: Facts, task: str, target: str | None = None) -> Result:
         return self.write_many([(f, task, target)])[0]
@@ -110,6 +154,11 @@ def brief(call, snapshot, voice: Voice | None = None) -> str:
     return (voice or default_voice()).write(from_snapshot(call, snapshot), "brief").text
 
 
+def ask(call, snapshot, question: str, voice: Voice | None = None) -> str:
+    """A free-form question about the car, answered from the facts in ``snapshot`` only."""
+    return (voice or default_voice()).write(from_snapshot(call, snapshot), "free", question.strip().lower().rstrip("?")).text
+
+
 def answer(call, snapshot, intent: str, target: str | None = None, voice: Voice | None = None) -> str:
     """Answer a fixed question: gap (``target`` = the other car's number), tyre_age, pit_window, plan_b, why."""
     from .facts import INTENTS
@@ -128,4 +177,4 @@ def timed(fn, n: int = 1):
     return (time.perf_counter() - t) / n
 
 
-__all__ = ["Voice", "Result", "say", "brief", "answer", "default_voice", "from_values"]
+__all__ = ["Voice", "Result", "say", "brief", "answer", "ask", "default_voice", "from_values"]
