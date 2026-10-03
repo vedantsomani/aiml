@@ -97,3 +97,8 @@ def test_engineer_on_the_synthetic_feed(race_log):
     assert all(car11[k] is not None for k in ("pace_sd_s", "pace_trend_s", "deg_s_per_lap", "fresh_soft_s",
                                                "fresh_medium_s", "fresh_hard_s"))
     assert car11["fresh_soft_s"] < car11["fresh_medium_s"] < car11["fresh_hard_s"]  # prior offsets
+
+    # cliff_risk: a probability whenever the race length is known, and the engineer is deterministic
+    assert state.total_laps
+    assert 0.0 < car11["cliff_risk"] < 0.5
+    assert _replay(race_log)[1].view(_replay(race_log)[0]).car("tyre", "11") == car11
