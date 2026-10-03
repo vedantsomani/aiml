@@ -12,7 +12,7 @@ A virtual F1 pit wall that runs on the public timing feed. It has one engineer p
 | Weather | rain in the next 10 minutes, slick / intermediate crossover | [weather](docs/engineers/weather.md) |
 | Models | cross-race models served live, identical to the benchmark | [models](docs/models.md) |
 | Strategy & head | Monte Carlo race simulation, Plan A / B, BOX / STAY OUT calls with reasons | [strategy](docs/engineers/strategy.md) |
-| Voice | our own small language model: radio calls and briefs, fact-checked | [voice](docs/engineers/voice.md) |
+| Voice | fine-tuned SmolLM2 plus our own small model: radio calls and briefs, fact-checked, spoken by Piper | [voice](docs/engineers/voice.md) |
 
 ```bash
 pitsense pitwall --year 2026 --race hungary --speed 20 --team ferrari   # replay with the dashboard
@@ -21,7 +21,7 @@ pitsense pitwall --live --team ferrari                                  # live r
 
 How a team uses it from day one: [docs/pitwall.md](docs/pitwall.md). How it is built, and the rules every engineer follows: [docs/ENGINEERING.md](docs/ENGINEERING.md).
 
-**Honest status.** Every number below is a backtest on the 2026 races, each scored with models trained only on races that finished before it. The live recorder has not yet been run against a real session, and box-call timing (precision 0.41) is still the weakest part. Run it in shadow mode (`pitsense shadow-score`) before trusting it.
+**Honest status.** Every number below is a backtest on the 2026 races, each scored with models trained only on races that finished before it. The live recorder has not yet been run against a real session, and box-call timing (precision 0.42) is still the weakest part. Run it in shadow mode (`pitsense shadow-score`) before trusting it.
 
 ---
 
@@ -156,7 +156,7 @@ Full per-race output: `reports/validation.txt`.
 | Undercut by the car behind within 5 laps | `undercut_gbm` | AUC 0.84 | 0.78 (gap rule) |
 | Rain within 10 minutes | nowcast | log loss 0.079 | 0.186 (base rate); only 3 wet races in 2026 |
 | Finishing position at 25/50/75% distance | race simulator | RPS 0.050 | 0.072 (current position) |
-| Box calls within ±2 laps (top 5) | head of strategy | precision 0.41, recall 0.27 | 0.28 / 0.24 (plan-only rule) |
+| Box calls within ±2 laps (top 5) | head of strategy | precision 0.42, recall 0.27 | 0.28 / 0.24 (plan-only rule) |
 
 Every engineer value goes into the benchmark rows, so the corrupted-future check (`pitsense leakcheck`) covers all of them. The simulator and calls have their own check (`pitsense strategy-leakcheck`). Full tables are in each engineer's doc.
 
@@ -167,10 +167,10 @@ Implement `fit(train_df, target)` and `predict(test_df)` (see `src/pitsense/benc
 ## Known limitations
 
 - **Live is untested.** The recorder and `pitsense pitwall --live` have not been run against a real session.
-- **Box-call timing is still the weakest part:** precision 0.41, recall 0.27. About half of BOX calls see no stop within 2 laps, and most stops under a safety car can't be foreseen a lap ahead.
+- **Box-call timing is still the weakest part:** precision 0.42, recall 0.27. A firm BOX is right about half the time (75% on the Azerbaijan 2026 replay); PREPARE_BOX is right about 40% of the time. The pit probabilities can't yet tell a stop 1-2 laps away from one 4-8 laps away, and most stops under a safety car can't be foreseen a lap ahead.
 - **Wet races get no strategy call.** There is no intermediate or wet tyre model; only 3 wet races in 2026.
 - **Public timing only:** no fuel loads, tyre temperatures or car telemetry. PitSense is strongest on rivals, whom teams also see only through timing.
-- **Voice is unfinished.** The fine-tuned SmolLM2 voice and spoken audio are built but not yet trained: run `pitsense voice train --backend llm`.
+- **Voice.** The fine-tuned SmolLM2-360M writes the radio calls: 0% fact errors on held-out 2026 data, with a guard fallback 0.3% of the time. Piper (British voice) speaks them offline. Each message takes about 1 s on the GPU.
 - **Safety cars are simplified:** at most one SC and one VSC per simulated future; lapped cars and blue flags are not modelled.
 
 ## Roadmap
