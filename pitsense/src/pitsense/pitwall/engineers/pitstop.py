@@ -51,7 +51,9 @@ def _number(x) -> float | None:
 
 class PitStopEngineer(Engineer):
     name = "pitstop"
-    requires = ("rules", "rivals")  # penalty_s_pending; pit_prob_1 of the cars behind
+    # rules: penalty_s_pending. Not rivals: rivals reads our loss (undercut), so co-stop rates
+    # from past races stand in for the cars behind stopping too (the rejoin was measured that way).
+    requires = ("rules",)
     features = ()
 
     @classmethod
@@ -224,9 +226,6 @@ class PitStopEngineer(Engineer):
                 p = 1.0
             else:
                 p = self.rates.rate(cond, j.number in recent, j.tyre_age, state.t - start)
-                rival = _number(view.car("rivals", j.number).get("pit_prob_1"))
-                if rival is not None:
-                    p = min(max(rival, 0.0), 1.0)
             p_stop.append(p)
         r = expected_rejoin(me.position, gaps[:len(p_stop)], loss, sd, p_stop)
         beyond = [g for g in gaps if g >= loss]

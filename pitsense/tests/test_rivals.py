@@ -12,6 +12,7 @@ from pitsense.pitloss import PitLossPrior
 from pitsense.pitwall import Context, PitWall
 from pitsense.pitwall.engineers.pitstop import PitStopEngineer
 from pitsense.pitwall.engineers.rivals import RivalsEngineer
+from pitsense.pitwall.engineers.rules import RulesEngineer
 from pitsense.pitwall.engineers.tyre import TyreEngineer
 from pitsense.state import RaceState, replay
 
@@ -64,7 +65,7 @@ def test_summarize_race_reads_stints_and_covers(race_log):
 
 def _wall(race_log, history=()):
     ctx = Context(prior=PitLossPrior(), past_races=tuple(history), meta={"circuit_key": 7})
-    return PitWall(ctx, None, [TyreEngineer, PitStopEngineer, RivalsEngineer])
+    return PitWall(ctx, None, [TyreEngineer, RulesEngineer, PitStopEngineer, RivalsEngineer])
 
 
 def test_engineer_fills_contract_keys_as_scalars_and_is_deterministic(race_log):
