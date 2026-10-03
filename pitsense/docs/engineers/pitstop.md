@@ -95,7 +95,7 @@ mass stop under SC are now handled; the rule scores .86. Worse than `rejoin_gbm`
 | sc | 39 | 6.76 | 5.87 | **5.76** |
 | vsc | 75 | 6.61 | **4.07** | 4.26 |
 
-Target: `y_pit_loss`, the time-aligned measure on the finished race (stops outside 5-45 s green / 0-40 s SC, VSC dropped).
+Target: `y_pit_loss`, the time-aligned measure on the finished race (stops outside the plausible range, 5-45 s green and 0-40 s SC/VSC, are dropped; "mixed" stops stay in "all").
 The floor is high: a race-median oracle scores about 2.1 (2025) to 2.4 (2026) MAE on green stops, since slow stops cannot be seen at entry.
 SC loss varies from 2 s to 25 s between stops and is the main open problem.
 
