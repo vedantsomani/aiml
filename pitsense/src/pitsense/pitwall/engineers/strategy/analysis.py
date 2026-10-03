@@ -34,7 +34,7 @@ SETTINGS = {
     "gain_sc": 0.6,  # places gained by stopping under a safety car to call BOX_IF_SC
     "p_sc": 0.7,  # share of surprise neutralisations that are full safety cars
     "w_time": 0.001,  # places per second of race time: breaks ties between plans with equal expected position
-    "lam_prior": 0.0,  # places per lap between a plan's first stop and the typical stop timing (rivals' pit probabilities)
+    "lam_prior": 0.02,  # places per lap between a plan's first stop and the typical stop timing (rivals' pit probabilities)
     "tol_keep": 0.05,  # keep last lap's target stop lap unless the best plan is better by more than this
 }
 OFFS1 = (0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 17, 20, 24, 28, 33, 38, 44, 50, 58)

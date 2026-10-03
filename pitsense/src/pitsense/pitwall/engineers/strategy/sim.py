@@ -45,7 +45,7 @@ PARAMS = {
     "sc_pull": 0.65,  # share of cars due to stop soon that come in under a safety car
     "vsc_pull": 0.30,
     "sc_pull_window": 14,
-    "stop_extra_s": 0.0,  # s added to every stop: traffic on rejoining, cold-tyre laps
+    "stop_extra_s": 6.0,  # s added to every stop: traffic on rejoining, cold-tyre laps
     "hold_gain": 1.0,  # most a defending car can gain (s) per lap by holding a rival off
 }
 
