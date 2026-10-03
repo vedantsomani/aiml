@@ -80,7 +80,9 @@ def decide(a, prev_target: int | None, *, pit_open: bool = True, sc_phase: str =
             if not pit_open:
                 return "PREPARE_BOX", comp, 0.6, "pit_lane_closed", A
             return "BOX", comp, min(0.97, max(0.5, _phi(-d / se))), "box_now", A
-        if g_win is not None and g_win <= S["tol_prep"] / h and p3 >= S["p3_prep"] * h:
+        near = S["prep_near"] is None or (g_now is not None and g_now <= S["prep_near"] / h)  # BOX conditions nearly met
+        if (g_win is not None and g_win <= S["tol_prep"] / h and p3 >= S["p3_prep"] * h and p1 >= S["p1_prep"] * h
+                and near):
             return "PREPARE_BOX", comp, min(0.95, max(0.5, _phi(d / se))), "stop_soon", A
     if a.gain_sc is not None and a.gain_sc >= S["gain_sc"] and sc_phase == "none":
         return "BOX_IF_SC", a.sc_best_comp, min(0.9, 0.5 + 0.2 * a.gain_sc), "sc_gain", A

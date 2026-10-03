@@ -84,6 +84,45 @@ def bundle_for_year(year: int):
     return bundle
 
 
+def _patch_decide(trace: list, cur: dict) -> None:
+    """Record every ``decide`` input (a light copy of the analysis) so call rules can be re-scored without a replay."""
+    from ..pitwall.engineers import head
+
+    orig = getattr(head, "_decide_orig", None) or head.decide
+    head._decide_orig = orig
+
+    def rec(a, prev_target, **kw):
+        out = orig(a, prev_target, **kw)
+        if a.plan_a is not None and a.ranked:
+            trace.append({"drv": cur["drv"], "car_lap": cur["lap"], "car": a.car, "prev_target": prev_target, "kw": dict(kw),
+                          "ranked": [(r.util, r.stops, r.first_offset) for r in a.ranked], "dnl": a.diff_now_later,
+                          "pp": a.pp, "gain_sc": a.gain_sc, "sc_comp": a.sc_best_comp, "anchor": a.anchor, "out": out[0]})
+        return out
+
+    head.decide = rec
+
+
+def replay_calls(trace: list[dict], final: RaceState, top5, decide_fn, k: int = 2) -> list[dict]:
+    """Re-run ``decide_fn`` over a recorded trace (same hysteresis chain) and return the logged calls as the bench logs them."""
+    from types import SimpleNamespace as NS
+
+    last, calls, last_key = {}, [], {}
+    for r in trace:
+        a = NS(plan_a=True, car=r["car"], anchor=r["anchor"], ranked=[NS(util=u, stops=s, first_offset=o) for u, s, o in r["ranked"]],
+               diff_now_later=r["dnl"], pp=r["pp"], gain_sc=r["gain_sc"], sc_best_comp=r["sc_comp"])
+        kw = dict(r["kw"])
+        kw["prev_call"] = last.get(r["car"])
+        act, comp = decide_fn(a, r["prev_target"], **kw)[:2]
+        last[r["car"]] = act
+        if r["car"] != r["drv"]:
+            continue
+        key = (act, comp)
+        if last_key.get(r["car"]) != key:
+            last_key[r["car"]] = key
+            calls.append({"kind": "call", "car_lap": r["car_lap"], "car": r["car"], "action": act, "compound": comp})
+    return calls
+
+
 def run_race(args) -> dict:
     """Replay one race: forecasts at the anchors, head calls for the top-5 finishers."""
     slug, year, stride, S, calls_on = args[:5]
@@ -106,6 +145,10 @@ def run_race(args) -> dict:
                            models=bundle_for_year(year) if use_models else None)
     wall = PitWall(ctx)
     state = RaceState(log.meta)
+    trace: list[dict] = []
+    cur = {"drv": None, "lap": None}
+    if calls_on:
+        _patch_decide(trace, cur)
     stops: dict[str, list[int]] = {}
     for pe in final.pit_events:
         if not pe.under_red:
@@ -128,6 +171,7 @@ def run_race(args) -> dict:
             for lap in state.new_laps:
                 if lap.driver in top5 and lap.lap >= 3 and lap.lap % stride == 0 and lap.lap < total - 1:
                     t0 = time.perf_counter()
+                    cur["drv"], cur["lap"] = lap.driver, lap.lap + 1
                     out = wall.calls(state)
                     t_calls += time.perf_counter() - t0
                     n_calls += 1
@@ -141,7 +185,7 @@ def run_race(args) -> dict:
                                           "car": c.car, "action": c.action, "compound": c.compound,
                                           "confidence": c.confidence})
     res = {"slug": slug, "year": year, "top5": top5, "fc": fc_rows, "ns": ns_rows, "calls": calls,
-           "stops": {k: stops.get(k, []) for k in top5}, "calls_s": t_calls / max(n_calls, 1)}
+           "stops": {k: stops.get(k, []) for k in top5}, "trace": trace, "calls_s": t_calls / max(n_calls, 1)}
     if calls_on:
         res["shadow"] = shadow_score(calls, final, 2, set(top5))
         out_dir = data_dir() / "scratch" / "calls"

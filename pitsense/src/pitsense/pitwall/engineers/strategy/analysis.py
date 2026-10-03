@@ -37,8 +37,10 @@ SETTINGS = {
     "lam_prior": 0.02,  # places per lap between a plan's first stop and the typical stop timing (rivals' pit probabilities)
     "use_hazard": True,  # head: time box calls with the pit probabilities (False: the plan alone, as before)
     "p1_box": 0.25,  # BOX needs a stop probability this lap of at least this ...
-    "p3_box": 0.50,  # ... or within 3 laps of at least this
+    "p3_box": 0.35,  # ... or within 3 laps of at least this
     "p3_prep": 0.20,  # PREPARE_BOX needs a stop probability within 3 laps of at least this
+    "p1_prep": 0.05,  # PREPARE_BOX also needs a stop probability this lap of at least this
+    "prep_near": None,  # PREPARE_BOX also needs stopping now to cost at most this many places (None: no such condition)
     "hold": 0.7,  # a box call made last lap is held down to this share of the thresholds
     "tol_keep": 0.05,  # keep last lap's target stop lap unless the best plan is better by more than this
 }
