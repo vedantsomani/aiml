@@ -232,3 +232,56 @@ def load_recording(path: Path, meta: dict | None = None) -> EventLog:
     # receive order is the truth for availability; keep it stable
     events.sort(key=lambda e: (e.t, e.seq))
     return EventLog(events, dict(meta or {}, source=str(path)))
+
+
+class RecordingTail:
+    """Follow a recording that is still being written.
+
+    :meth:`poll` returns the events completed since the last call, in file order. A last line
+    that is still being written is kept back until its newline arrives; a broken complete line
+    is skipped (and counted in ``bad_lines``). ``t`` is seconds since the first message received,
+    exactly as :func:`load_recording` computes it, so following and replaying a file agree.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        self.t0: float | None = None
+        self.first_recv: float | None = None
+        self.bad_lines = 0
+        self._offset = 0
+        self._partial = b""
+        self._seq = 0
+
+    def poll(self) -> list[Event]:
+        try:
+            size = self.path.stat().st_size
+        except OSError:
+            return []  # not created yet
+        if size < self._offset:  # truncated or replaced: start over
+            self._offset, self._partial = 0, b""
+        if size == self._offset:
+            return []
+        with open(self.path, "rb") as f:
+            f.seek(self._offset)
+            chunk = f.read(size - self._offset)
+        self._offset += len(chunk)
+        data = self._partial + chunk
+        *lines, self._partial = data.split(b"\n")
+        events: list[Event] = []
+        for raw in lines:
+            if not raw.strip():
+                continue
+            try:
+                row = json.loads(raw)
+                recv, topic = float(row["recv"]), row["topic"]
+            except (ValueError, KeyError, TypeError):
+                self.bad_lines += 1
+                continue
+            seq, self._seq = self._seq, self._seq + 1
+            if self.t0 is None:
+                self.t0 = self.first_recv = recv
+            if topic.endswith(".z"):
+                continue  # compressed telemetry; not used by the reducer
+            events.append(Event(round(max(recv - self.t0, 0.0), 3), topic, row.get("data"), seq,
+                                row.get("kind", "delta")))
+        return events

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PitSense Pit Wall</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">PIT<span>SENSE</span></div>
+  <div id="title" class="hd">--</div>
+  <div id="lap" class="hd big">LAP --</div>
+  <div id="clock" class="hd">--</div>
+  <div id="status" class="status green">GREEN</div>
+  <div id="wx" class="hd">--</div>
+  <div id="loss" class="hd">--</div>
+  <div id="mode" class="chip">--</div>
+  <div id="conn" class="chip off">connecting</div>
+</header>
+<div id="warn" class="warn" hidden></div>
+<main>
+  <section class="panel tower">
+    <h2>Timing tower <small>click a car to pin it</small></h2>
+    <table id="tower">
+      <thead><tr>
+        <th>P</th><th>CAR</th><th>GAP</th><th>INT</th><th>TYRE</th><th>STOPS</th>
+        <th>LAST</th><th>BOX NOW</th><th>PIT %</th><th>CALL</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="out" class="out"></div>
+  </section>
+  <aside>
+    <section class="panel"><h2>Our cars <small id="focusnote"></small></h2><div id="focus"></div></section>
+    <section class="panel"><h2>Alerts</h2><div id="alerts"></div></section>
+    <section class="panel"><h2>Race control</h2><div id="rc"></div></section>
+  </aside>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

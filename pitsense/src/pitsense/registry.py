@@ -51,6 +51,7 @@ LABELERS: list[str] = [
 COMMANDS: list[str] = [
     "pitsense.bench.rules:add_commands",
     "pitsense.modelstore:add_commands",
+    "pitsense.pitwall.runtime:add_commands",
 ]
 
 
