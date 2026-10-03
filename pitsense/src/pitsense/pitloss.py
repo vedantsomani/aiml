@@ -661,22 +661,54 @@ class Rejoin:
     gap_behind: float | None  # s ahead of the first car we'd stay ahead of (None: nobody)
 
 
-def expected_rejoin(position: int, gaps: list[float], loss: float, sd: float, p_stop: list[float]) -> Rejoin:
+REJOIN_STAT = "mode"  # which summary of the passers' distribution is the expected position: mean | median | mode
+
+
+def _pmf(qs: list[float]) -> list[float]:
+    """Distribution of the number of successes among independent chances ``qs`` (Poisson binomial)."""
+    pmf = [1.0]
+    for q in qs:
+        nxt = [0.0] * (len(pmf) + 1)
+        for k, v in enumerate(pmf):
+            nxt[k] += v * (1.0 - q)
+            nxt[k + 1] += v * q
+        pmf = nxt
+    return pmf
+
+
+def _summary(pmf: list[float], stat: str) -> int:
+    if stat == "mode":
+        return max(range(len(pmf)), key=lambda k: (pmf[k], -k))
+    if stat == "median":
+        acc = 0.0
+        for k, v in enumerate(pmf):
+            acc += v
+            if acc >= 0.5:
+                return k
+    return math.floor(sum(k * v for k, v in enumerate(pmf)) + 0.5)
+
+
+def expected_rejoin(position: int, gaps: list[float], loss: float, sd: float, p_stop: list[float],
+                    stat: str | None = None) -> Rejoin:
     """Where a car stopping now comes out.
 
     ``gaps``: seconds to each car behind in running order (cumulative); ``p_stop``: the
     chance each of them stops in the same window. A car behind gets by if it doesn't
     stop and its gap is under the loss, with the loss uncertain by ``sd`` (normal).
+    The position is the median (``stat``) of the resulting distribution of passers.
     """
     passers, within, within_stop = 0.0, 0, 0.0
     gap_ahead = gap_behind = None
+    qs: list[float] = []
     for g, p in zip(gaps, p_stop):
         z = (loss - g) / sd if sd > 0 else (math.inf if g < loss else -math.inf)
         if z < -4.0:
             if gap_behind is None and p < 0.5:
                 gap_behind = g - loss
             break
-        passers += _phi(z) * (1.0 - p)
+        q = _phi(z) * (1.0 - p)
+        qs.append(q)
+        passers += q
         if g < loss:
             within += 1
             within_stop += p
@@ -684,6 +716,7 @@ def expected_rejoin(position: int, gaps: list[float], loss: float, sd: float, p_
                 gap_ahead = loss - g
         elif gap_behind is None and p < 0.5:
             gap_behind = g - loss
-    return Rejoin(position + math.floor(passers + 0.5), round(passers, 3), within, round(within_stop, 3),
+    n = _summary(_pmf(qs), stat or REJOIN_STAT)
+    return Rejoin(position + n, round(passers, 3), within, round(within_stop, 3),
                   None if gap_ahead is None else round(gap_ahead, 3),
                   None if gap_behind is None else round(gap_behind, 3))
