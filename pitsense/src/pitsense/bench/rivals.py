@@ -22,7 +22,9 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+from ..pitwall.engineers.tyre import TyreEngineer
 from ..state import RaceState
+from .features import NUMERIC_FEATURES
 from .models import BaseRate
 from .tasks import Task
 
@@ -157,22 +159,23 @@ class RivalsLogitNoTeam(_Logit):
     team = False
 
 
-# inputs of the learned models (chosen on 2025): the core situation, the engineer's pit probabilities and signals
+# inputs of the learned models: everything gbm_hazard sees (base + tyre engineer's keys) plus the rivals' keys
 BASE_COLS = ("tyre_age", "laps_in_stint", "race_frac", "laps_remaining", "must_stop", "sc", "vsc", "position",
              "interval_ahead", "gap_behind", "n_pitted_recent", "ahead_pitted_recent", "behind_pitted_recent",
              "pit_stops", "cmp_soft", "cmp_medium", "cmp_hard")
 RIVAL_COLS = ("rivals__pit_prob_1", "rivals__pit_prob_3", "rivals__pit_prob_5", "rivals__ratio", "rivals__mate_pit",
-              "tyre__cliff_risk", "tyre__deg_s_per_lap")
+              "rivals__undercut_threat", "rivals__undercut_chance")
+TYRE_COLS = tuple(f"tyre__{k}" for k in TyreEngineer.features)
 
 
 class _GBM:
     name = ""
     team = True
-    params = dict(max_iter=300, learning_rate=0.015, max_leaf_nodes=8, min_samples_leaf=300,
-                  l2_regularization=10.0, random_state=0)
+    params = dict(max_iter=150, learning_rate=0.03, max_leaf_nodes=8, min_samples_leaf=200,
+                  l2_regularization=10.0, random_state=0)  # as gbm_hazard (2025 favoured nothing larger)
 
     def _cols(self, df):
-        return list(BASE_COLS + RIVAL_COLS + (TEAM_COLS if self.team else ()))
+        return NUMERIC_FEATURES + list(TYRE_COLS) + list(RIVAL_COLS + (TEAM_COLS if self.team else ()))
 
     def fit(self, df, target):
         self.cols = self._cols(df)

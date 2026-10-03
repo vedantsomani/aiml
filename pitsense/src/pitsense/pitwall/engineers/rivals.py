@@ -99,9 +99,9 @@ class _Stints:
 class RivalsEngineer(Engineer):
     name = "rivals"
     requires = ("tyre", "pitstop")
-    features = ("pit_prob_1", "pit_prob_3", "pit_prob_5", "prior_pit_3", "undercut_threat", "undercut_chance",
-                "typical_stint_laps", "team_cover_rate", "uc_margin_threat", "uc_margin_chance", "cover",
-                "mate_pit", "ahead_pit", "behind_pit")
+    # No declared benchmark features: on 2025 none of these keys improved the core gbm_hazard (k=3 got worse),
+    # so the core leaderboard stays as it was. The rivals models in bench/rivals.py name the keys they use.
+    features = ()
 
     # ------------------------------------------------------------------ learning from finished races
     @classmethod
