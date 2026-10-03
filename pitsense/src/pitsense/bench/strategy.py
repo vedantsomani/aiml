@@ -199,8 +199,7 @@ def _finish(df, test_year, min_train_races, **kw) -> EvalResult:
     board = pd.DataFrame(board).sort_values("rps").reset_index(drop=True)
     per = d.groupby("race_id").apply(lambda g: pd.Series({"sim": g.rps_sim.mean(), "current_position": g.rps_now.mean(),
                                                           "pace_extrapolation": g.rps_pace.mean()}), include_groups=False).reset_index()
-    cal = {"top3": calibration_table((d.y <= 3).astype(float).to_numpy(), d.p3.to_numpy()),
-           "top10": calibration_table((d.y <= 10).astype(float).to_numpy(), d.p10.to_numpy())}
+    cal = {"sim": calibration_table((d.y <= 10).astype(float).to_numpy(), d.p10.to_numpy())}  # P(top 10)
     return EvalResult("strategy_finish", board, per, d, cal)
 
 
