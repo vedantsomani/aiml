@@ -46,7 +46,9 @@ LABELERS: list[str] = [
 ]
 
 # CLI extensions: f(subparsers) -> None, adding `pitsense <command>` parsers (cli.py).
-COMMANDS: list[str] = []
+COMMANDS: list[str] = [
+    "pitsense.bench.rules:add_commands",
+]
 
 
 def load(spec: str) -> Any:
