@@ -33,8 +33,8 @@ def corpus(per_race=1000, calls=3, seed=SEED):
     """(train, val, test) sample lists. Test = every 2026 race, validation = the last two 2025 races."""
     sit = synth.load_situations((2025, 2026), None, seed)
     tr, va, te = synth.split_races(sit)
-    mk = lambda races, n, c: synth.build((2025, 2026), n, c, seed, races=set(races))  # noqa: E731
-    return mk(tr, per_race, calls), mk(va, 300, 1), mk(te, 150, 1)
+    mk = lambda races, n, c, al: synth.build((2025, 2026), n, c, seed, races=set(races), alias=al)  # noqa: E731
+    return mk(tr, per_race, calls, 0.7), mk(va, 300, 1, 0.0), mk(te, 150, 1, 0.0)
 
 
 def test_set(per_race=150, seed=SEED):

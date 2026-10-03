@@ -169,10 +169,13 @@ class Sample:
     ask: str | None = None
 
 
-def samples_for_row(v: dict, tla_of: dict, k: int, seed: int = 0) -> list[Sample]:
+def samples_for_row(v: dict, tla_of: dict, k: int, seed: int = 0, alias: bool = False) -> list[Sample]:
     """The radio, brief and two question samples for one real situation (call variant ``k``)."""
     rng = _rng(seed, v["race_id"], v["driver"], v["t"], k)
     v = augment(v, rng)
+    if alias:  # invented three-letter names, so the model learns to copy names, not to know a grid
+        letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        tla_of = {c: "".join(rng.choice(letters) for _ in range(3)) for c in tla_of}
     call = sample_call(v, rng)
     f = from_values(call, v, tla_of, style_for(call.car, v["t"], salt=f"{seed}-{k}"))
     out = []
@@ -207,7 +210,7 @@ def load_situations(years=(2025, 2026), per_race: int | None = None, seed: int =
     return out
 
 
-def build(years, per_race, calls_per_row=1, seed=0, stay_keep=0.4, races=None) -> list[Sample]:
+def build(years, per_race, calls_per_row=1, seed=0, stay_keep=0.4, races=None, alias=0.0) -> list[Sample]:
     """Samples for the given years (or race ids). STAY_OUT is the common call in real races, so
     only ``stay_keep`` of those situations are kept: the model must see the rare calls often."""
     out: list[Sample] = []
@@ -217,7 +220,7 @@ def build(years, per_race, calls_per_row=1, seed=0, stay_keep=0.4, races=None) -
             if races is not None and race_id not in races:
                 continue
             for k in range(calls_per_row):
-                ss = samples_for_row(v, tla_of, k, seed)
+                ss = samples_for_row(v, tla_of, k, seed, _rng(seed, 'alias', race_id, v['driver'], v['t'], k).random() < alias)
                 if ss and ss[0].action == "STAY_OUT" and _rng(seed, "keep", race_id, v["driver"], v["t"], k).random() > stay_keep:
                     continue
                 out += ss
