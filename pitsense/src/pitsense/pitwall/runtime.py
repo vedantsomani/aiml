@@ -980,6 +980,8 @@ def cmd_pitwall(a) -> None:
     try:
         while True:
             time.sleep(0.5)
+            if a.no_browser and rt.status in ("finished", "error"):  # headless: exit once the replay is done
+                break
     except KeyboardInterrupt:
         print("\nstopping")
     finally:
