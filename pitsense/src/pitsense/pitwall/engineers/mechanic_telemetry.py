@@ -238,6 +238,26 @@ class CarTrack:
         self.n_ok = 0.0  # seconds of usable data seen
 
 
+def _positions_agree(data: dict, pos: dict) -> bool:
+    """Speed implied by consecutive positions (1/10 m) against the CarData speed. A healthy feed gives a
+    median ratio of 1.00; a frozen or scrambled one (2026 Hungary) gives ~0. Too little data counts as agreeing."""
+    u = pos["utc"]
+    if len(u) < 6:
+        return True
+    o = np.argsort(u, kind="stable")
+    u, x, y = u[o], pos["x"][o], pos["y"][o]
+    dt = np.diff(u)
+    ok = (dt > 0.05) & (dt < 2.0)
+    if ok.sum() < 6 or len(data["utc"]) < 2:
+        return True
+    vp = np.hypot(np.diff(x), np.diff(y))[ok] / 10.0 / dt[ok] * 3.6
+    vt = np.interp(u[1:][ok], data["utc"], data["speed"])
+    m = vt > 80
+    if m.sum() < 6:
+        return True
+    return 0.6 <= float(np.median(vp[m] / vt[m])) <= 1.6
+
+
 class MechanicTelemetry(Engineer):
     name = "mechanic_telemetry"
     requires = ()
@@ -353,6 +373,8 @@ class MechanicTelemetry(Engineer):
             on = pos["on_track"][o][idx] > 0.5
             cell = np.floor(x / CELL).astype(np.int64) * 100003 + np.floor(y / CELL).astype(np.int64)
             cell[(near > 1.5) | ~on] = -1
+            if not _positions_agree(data, pos):
+                cell[:] = -1  # the position feed is frozen or scrambled: no place on track, no field comparison
         valid = np.isfinite(speed) & np.isfinite(rpm) & (thr <= 100) & (brk <= 100)
         return {"utc": u, "speed": speed, "rpm": rpm, "gear": gear, "thr": thr, "brk": brk, "drs": drs,
                 "cell": cell, "valid": valid}

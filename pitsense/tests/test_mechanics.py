@@ -39,6 +39,17 @@ def _iso(utc: float) -> str:
     return datetime.fromtimestamp(utc, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
+def _healthy_speed(s: float) -> float:
+    if s < 30:
+        return 120 + 180 * (s / 30) ** 0.6
+    if s < 34:
+        return 300 - (300 - 90) * (s - 30) / 4
+    return 90 + 60 * math.sin((s - 34) / 26 * math.pi)
+
+
+_DIST = np.cumsum([_healthy_speed(i / 100) / 3.6 * 0.01 * 10 for i in range(6000)])  # 1/10 m
+
+
 def _lap_profile(s: float, scale: float = 1.0, gearbox_fault: bool = False):
     """One 60 s lap around a 2 km loop: speed, rpm, gear, throttle, brake and the track position.
 
@@ -59,14 +70,13 @@ def _lap_profile(s: float, scale: float = 1.0, gearbox_fault: bool = False):
     if gearbox_fault and s < 30:
         gear = 0  # neutral while moving
     rpm = float(np.clip(v * (62.0 / (1 + 0.15 * (gear - 4)) if gear else 20.0), 4000, 12000))
-    # track: a rectangle, 30 s on the long side
-    frac = s / LAP_S
-    x = 60000 * min(frac * 2, 1.0) if frac < 0.5 else 60000 * (1 - (frac - 0.5) * 2)
-    y = 0.0 if frac < 0.5 else 8000.0
+    # track: distance along the lap at the healthy car's speed, in 1/10 m, so that the position feed agrees with CarData
+    x = _DIST[min(int(s * 100), len(_DIST) - 1)]
+    y = 0.0
     return v, rpm, gear, thr, brk, x, y
 
 
-def feed_events(fault_car: str | None = None, fault: str = "power") -> list[tuple[float, str, dict]]:
+def feed_events(fault_car: str | None = None, fault: str = "power", freeze_pos: bool = False) -> list[tuple[float, str, dict]]:
     """Race timing for 3 cars plus 4 Hz CarData and Position. The fault car develops ``fault`` at FAULT_T."""
     ev: list[tuple[float, str, dict]] = []
     add = lambda t, topic, data: ev.append((t, topic, data))  # noqa: E731
@@ -108,6 +118,8 @@ def feed_events(fault_car: str | None = None, fault: str = "power") -> list[tupl
                 if tm < T0:
                     v = rpm = gear = thr = brk = 0.0
                 cars[n] = {"Channels": {"0": rpm, "2": v, "3": gear, "4": thr, "5": brk, "45": 0}}
+                if freeze_pos:
+                    x, y = 1000.0, 1000.0  # a stuck position feed
                 pcars[n] = {"Status": "OnTrack", "X": x + 40 * ci, "Y": y + 20 * ci, "Z": 0}
             tel.append({"Utc": _iso(UTC0 + tm), "Cars": cars})
             pos.append({"Timestamp": _iso(UTC0 + tm), "Entries": pcars})
@@ -147,6 +159,15 @@ def test_healthy_race_raises_nothing():
     assert not [a for a in wall.alerts(st)]
     for n in CARS:
         assert (wall.view(st).car("mechanic_telemetry", n)["mech_risk"] or 0) < 0.3
+
+
+def test_frozen_position_feed_is_not_a_slow_car():
+    """Positions that do not agree with CarData speed (2026 Hungary) must not turn into field comparisons."""
+    st, wall, _ = run(feed_events(None, freeze_pos=True))
+    assert wall.alerts(st) == []
+    for n in CARS:
+        v = wall.view(st).car("mechanic_telemetry", n)
+        assert (v["slow_car"] or 0) < 0.3 and (v["power_loss"] is None or v["power_loss"] < 0.3)
 
 
 def test_neutral_while_moving_is_a_gearbox_flag():
