@@ -19,7 +19,8 @@ import logging
 import time
 from pathlib import Path
 
-from .events import Event, EventLog
+from .config import FEED_TOPICS
+from .events import Event, EventLog, decode_z
 
 TOPICS = [
     "Heartbeat", "ExtrapolatedClock", "SessionInfo", "SessionStatus", "SessionData", "DriverList",
@@ -165,7 +166,7 @@ def record(out: Path, *, minutes: float = 180.0, no_auth: bool = False, idle_tim
     return total
 
 
-def load_fastf1_recording(path: Path, meta: dict | None = None) -> EventLog:
+def load_fastf1_recording(path: Path, meta: dict | None = None, *, feeds: bool = False) -> EventLog:
     """Fallback: a file saved with FastF1's own recorder (`python -m fastf1.livetiming save f.txt`).
 
     Lines are Python-literal lists: [topic, data, utc]. The initial subscribe
@@ -195,7 +196,7 @@ def load_fastf1_recording(path: Path, meta: dict | None = None) -> EventLog:
             except (ValueError, SyntaxError):
                 continue
             kind = "delta"
-            if isinstance(data, str):
+            if isinstance(data, str) and not topic.endswith(".z"):  # .z payloads stay base64
                 data, kind = json.loads(data), "snapshot"
             parsed.append((utc_seconds(ts), topic, data, i, kind))
     known = [p[0] for p in parsed if p[0] is not None]
@@ -204,8 +205,10 @@ def load_fastf1_recording(path: Path, meta: dict | None = None) -> EventLog:
     t0 = min(known)
     events, last_t = [], 0.0
     for ts, topic, data, i, kind in parsed:
-        if topic.endswith(".z"):
+        if topic in FEED_TOPICS and not feeds:
             continue
+        if topic.endswith(".z"):
+            data = decode_z(data) if isinstance(data, str) else data
         t = last_t if ts is None else ts - t0  # snapshots inherit the preceding time
         last_t = max(last_t, t)
         events.append(Event(round(t, 3), topic, data, i, kind))
@@ -213,8 +216,15 @@ def load_fastf1_recording(path: Path, meta: dict | None = None) -> EventLog:
     return EventLog(events, dict(meta or {}, source=str(path)))
 
 
-def load_recording(path: Path, meta: dict | None = None) -> EventLog:
-    """Recorded JSONL -> EventLog. ``t`` = seconds since the first message was received."""
+def _feed_data(topic: str, data):
+    return decode_z(data) if topic.endswith(".z") else data
+
+
+def load_recording(path: Path, meta: dict | None = None, *, feeds: bool = False) -> EventLog:
+    """Recorded JSONL -> EventLog. ``t`` = seconds since the first message was received.
+
+    Telemetry, position and radio messages are kept only with ``feeds=True`` (``.z`` decoded).
+    """
     rows = []
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -226,9 +236,9 @@ def load_recording(path: Path, meta: dict | None = None) -> EventLog:
     events = []
     for i, r in enumerate(rows):
         topic = r["topic"]
-        if topic.endswith(".z"):
-            continue  # compressed telemetry; not used by the reducer yet
-        events.append(Event(round(r["recv"] - t0, 3), topic, r["data"], i, r.get("kind", "delta")))
+        if topic in FEED_TOPICS and not feeds:
+            continue  # large, and not used by the timing reducer
+        events.append(Event(round(r["recv"] - t0, 3), topic, _feed_data(topic, r["data"]), i, r.get("kind", "delta")))
     # receive order is the truth for availability; keep it stable
     events.sort(key=lambda e: (e.t, e.seq))
     return EventLog(events, dict(meta or {}, source=str(path)))
@@ -243,8 +253,9 @@ class RecordingTail:
     exactly as :func:`load_recording` computes it, so following and replaying a file agree.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, feeds: bool = False) -> None:
         self.path = Path(path)
+        self.feeds = feeds  # also yield telemetry, position and radio events
         self.t0: float | None = None
         self.first_recv: float | None = None
         self.bad_lines = 0
@@ -280,8 +291,8 @@ class RecordingTail:
             seq, self._seq = self._seq, self._seq + 1
             if self.t0 is None:
                 self.t0 = self.first_recv = recv
-            if topic.endswith(".z"):
-                continue  # compressed telemetry; not used by the reducer
-            events.append(Event(round(max(recv - self.t0, 0.0), 3), topic, row.get("data"), seq,
+            if topic in FEED_TOPICS and not self.feeds:
+                continue  # large, and not used by the timing reducer
+            events.append(Event(round(max(recv - self.t0, 0.0), 3), topic, _feed_data(topic, row.get("data")), seq,
                                 row.get("kind", "delta")))
         return events

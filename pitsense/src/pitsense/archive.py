@@ -315,6 +315,49 @@ def download_session(
     return out
 
 
+def radio_paths(session_dir: Path) -> list[str]:
+    """Mp3 paths (relative to the session folder) named by a downloaded TeamRadio stream."""
+    f = session_dir / "TeamRadio.jsonStream"
+    if not f.exists():
+        return []
+    seen: dict[str, None] = {}
+    for line in _decode(f.read_bytes()).splitlines():
+        parsed = parse_stream_line(line)
+        if parsed is None or not isinstance(parsed[1], dict):
+            continue
+        caps = parsed[1].get("Captures") or ()
+        for c in caps.values() if isinstance(caps, dict) else caps:
+            if isinstance(c, dict) and c.get("Path"):
+                seen[c["Path"]] = None
+    return list(seen)
+
+
+def download_radio(ref: SessionRef, *, jobs: int = 3) -> tuple[int, int]:
+    """Download the mp3s a session's TeamRadio stream names, next to the stream.
+
+    Returns (downloaded, not published). A missing clip leaves ``X.mp3.missing`` so it is
+    not asked for again. Run :func:`download_session` with ``RADIO_TOPICS`` first.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    out = ref.local_dir
+    todo = [p for p in radio_paths(out) if not (out / p).exists() and not (out / (p + ".missing")).exists()]
+
+    def one(path: str) -> bool:
+        got = _get_archive(f"{ref.path}{path}")
+        if got is None:
+            marker = out / (path + ".missing")
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("not published\n", encoding="utf-8")
+            return False
+        _save(out / path, *got)
+        return True
+
+    with ThreadPoolExecutor(max(1, min(jobs, 3))) as pool:
+        ok = list(pool.map(one, todo))
+    return sum(ok), len(ok) - sum(ok)
+
+
 def load_ref(session_dir: Path) -> SessionRef:
     return SessionRef.from_dict(json.loads((session_dir / "session.json").read_text(encoding="utf-8")))
 

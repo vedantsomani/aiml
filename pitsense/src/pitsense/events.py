@@ -9,17 +9,19 @@ published. Nothing may use an event before its ``t``.
 
 from __future__ import annotations
 
+import base64
 import bisect
 import gzip
 import json
 import re
+import zlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
 from typing import Any, Iterator
 
-from .config import TOPIC_PRIORITY
+from .config import FEED_TOPICS, TOPIC_PRIORITY
 
 _TS = re.compile(r"^(\d+):(\d{2}):(\d{2}(?:\.\d+)?)")
 
@@ -51,6 +53,16 @@ def parse_stream_line(line: str) -> tuple[float, Any] | None:
         raise ValueError(f"bad stream line: {line[:40]!r}")
     payload = line[m.end():]
     return parse_clock(line), json.loads(payload)
+
+
+def decode_z(payload: Any) -> Any:
+    """Payload of a ``.z`` topic (base64 of raw-deflate JSON) -> the JSON it holds.
+
+    Anything that is not a string (already decoded) is returned as is.
+    """
+    if not isinstance(payload, str):
+        return payload
+    return json.loads(zlib.decompress(base64.b64decode(payload), -15))
 
 
 def _sort_key(topic: str, t: float, line_no: int) -> tuple:
@@ -144,12 +156,21 @@ def _parse_utc(text: str) -> datetime:
     return dt.replace(tzinfo=timezone.utc)
 
 
-def load_archive_session(session_dir: Path, topics: tuple[str, ...] | None = None) -> EventLog:
-    """Build the event log of a downloaded session from its ``*.jsonStream`` files."""
+def load_archive_session(
+    session_dir: Path, topics: tuple[str, ...] | None = None, *, feeds: bool = False
+) -> EventLog:
+    """Build the event log of a downloaded session from its ``*.jsonStream`` files.
+
+    The telemetry, position and radio feeds (``config.FEED_TOPICS``) are large and not used by
+    the timing reducer, so they are loaded only with ``feeds=True`` (or when named in ``topics``).
+    ``.z`` payloads are decoded; each event is stamped with its message's publish time.
+    """
     session_dir = Path(session_dir)
     files = sorted(session_dir.glob("*.jsonStream"))
     if topics is not None:
         files = [f for f in files if f.stem in topics]
+    elif not feeds:
+        files = [f for f in files if f.stem not in FEED_TOPICS]
     keyed: list[tuple[tuple, Event]] = []
     for f in files:
         topic = f.stem
@@ -159,6 +180,8 @@ def load_archive_session(session_dir: Path, topics: tuple[str, ...] | None = Non
             if parsed is None:
                 continue
             t, data = parsed
+            if topic.endswith(".z"):
+                data = decode_z(data)
             keyed.append((_sort_key(topic, t, line_no), Event(t, topic, data, line_no)))
     keyed.sort(key=lambda kv: kv[0])
     events = [Event(e.t, e.topic, e.data, i, e.kind) for i, (_, e) in enumerate(keyed)]

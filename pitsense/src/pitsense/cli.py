@@ -46,13 +46,22 @@ def cmd_list(a) -> None:
 
 def cmd_fetch(a) -> None:
     from . import archive
-    from .config import raw_dir
+    from .config import DEFAULT_TOPICS, RADIO_TOPICS, TELEMETRY_TOPICS, raw_dir
 
     refs = _races(a.year, a.race, a.sprints)
     t0 = time.time()
+    topics = DEFAULT_TOPICS
+    if a.telemetry:
+        topics += TELEMETRY_TOPICS
+    if a.radio:
+        topics += RADIO_TOPICS
     for ref in refs:
-        archive.download_session(ref, force=a.force)
-        print(f"  {ref.slug}")
+        archive.download_session(ref, topics, force=a.force)
+        extra = ""
+        if a.radio:
+            n, miss = archive.download_radio(ref)
+            extra = f"  radio +{n} mp3 ({miss} missing)"
+        print(f"  {ref.slug}{extra}")
     print(f"{len(refs)} session(s) in {raw_dir()} ({time.time() - t0:.0f} s)")
 
 
@@ -282,6 +291,8 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--race", help="one race, e.g. 'hungary' (default: all races of the year)")
     s.add_argument("--sprints", action="store_true", help="sprint sessions instead of Grands Prix")
     s.add_argument("--force", action="store_true", help="re-download")
+    s.add_argument("--telemetry", action="store_true", help="also CarData.z and Position.z (~17 MB per race)")
+    s.add_argument("--radio", action="store_true", help="also TeamRadio and its mp3 files")
     s.set_defaults(fn=cmd_fetch)
 
     s = sub.add_parser("replay", help="timing tower + 'pit now' projection as of a lap, using only the past")

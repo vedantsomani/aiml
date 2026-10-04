@@ -45,6 +45,13 @@ DEFAULT_TOPICS: tuple[str, ...] = (
     "ExtrapolatedClock",
 )
 
+# Opt-in feed topics (`pitsense fetch --telemetry` / `--radio`). CarData.z and Position.z are
+# ~8-10 MB each per race (base64 raw-deflate JSON); TeamRadio is a few KB plus one mp3 per message.
+# They never enter the benchmark: load_archive_session leaves them out unless feeds=True.
+TELEMETRY_TOPICS: tuple[str, ...] = ("CarData.z", "Position.z")
+RADIO_TOPICS: tuple[str, ...] = ("TeamRadio",)
+FEED_TOPICS: tuple[str, ...] = TELEMETRY_TOPICS + RADIO_TOPICS
+
 # When several messages share a timestamp, apply them in this order (lower first).
 # Deterministic ordering is what makes replay reproducible.
 TOPIC_PRIORITY: dict[str, int] = {
@@ -61,6 +68,9 @@ TOPIC_PRIORITY: dict[str, int] = {
     "PitLaneTimeCollection": 10,
     "RaceControlMessages": 11,
     "WeatherData": 12,
+    "TeamRadio": 13,
+    "CarData.z": 14,
+    "Position.z": 15,
 }
 
 TRACK_STATUS = {

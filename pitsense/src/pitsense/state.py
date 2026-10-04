@@ -18,8 +18,9 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from .config import DRY_COMPOUNDS, NOMINATIONS, TRACK_STATUS
+from .config import DRY_COMPOUNDS, FEED_TOPICS, NOMINATIONS, TRACK_STATUS
 from .events import Event, EventLog
+from .feeds import Feeds
 from .merge import clone, deep_merge
 
 _LAPS_DOWN = re.compile(r"^\+?(\d+)\s*L(?:AP)?S?$", re.IGNORECASE)
@@ -215,6 +216,7 @@ class RaceState:
         self._pit_series_count: dict[str, int] = {}
         self._plt_seen: set[tuple[str, str]] = set()
         self._has_pit_series = False
+        self.feeds = Feeds(self.meta)  # not part of view() or fingerprint()
 
     # ------------------------------------------------------------------ public
     @property
@@ -232,6 +234,9 @@ class RaceState:
     def apply(self, e: Event) -> None:
         self.t = e.t
         self.new_laps = []
+        if e.topic in FEED_TOPICS:  # telemetry, positions, radio: kept apart from the timing state
+            self.feeds.apply(e)
+            return
         if e.kind == "snapshot":
             self.topics[e.topic] = clone(e.data)
         else:
