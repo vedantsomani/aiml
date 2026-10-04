@@ -238,7 +238,7 @@ def replay_race(slug: str, step: float = 10.0, feeds: bool = False) -> pd.DataFr
         out.append({"race_id": slug, "t": state.t, "lap": i + 1, "y_sc_within_2": float(bool(later)),
                     "y_next_onset_t": nxt_on[0] if nxt_on else float("nan"),
                     "sc": v["safetycar__sc_prob_2laps"], "vsc": v["safetycar__vsc_prob_2laps"],
-                    "engineer": v["safetycar__neutral_prob_2laps"], "reason": v["safetycar__sc_reason"],
+                    "engineer": v["safetycar__neutral_prob_2laps"], "warn": float(v["safetycar__sc_warn"]), "reason": v["safetycar__sc_reason"],
                     "yellow": float(state.track_status == "2"), "feed_stopped": v["safetycar__feed_stopped"]})
     return pd.DataFrame(out)
 
@@ -331,7 +331,8 @@ def continuous_section(a, select_year: int, test_years: list[int], sel: pd.DataF
             P = sel if (year == select_year and not feeds) else continuous_year(year, a.step, feeds, a.jobs)
             y = P.y_sc_within_2.to_numpy(float)
             sc = binary_scores(y, P.engineer.to_numpy(float))
-            rows = [{"warning": "engineer", "theta": th, **warning_table(P, "engineer", th)},
+            rows = [{"warning": "engineer alert (sc_warn)", "theta": ALERT_P, **warning_table(P, "warn", 0.5)},
+                    {"warning": "engineer, probability only", "theta": th, **warning_table(P, "engineer", th)},
                     {"warning": "rule: status 2 (yellow)", "theta": 0.5, **warning_table(P, "yellow", 0.5)}]
             label = " with telemetry / position feeds" if feeds else ""
             text.append(f"### {year}{label}: {P.race_id.nunique()} races, {len(P)} samples, {int(y.sum())} positive; "

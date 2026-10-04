@@ -529,7 +529,9 @@ class SafetyCarEngineer(Engineer):
             circuit_high = m.rate["sc"] + m.rate["vsc"] > 1.5 * (m.pool_rate["sc"] + m.pool_rate["vsc"])
             reason = reason_text(f, ex, sc, circuit_high)
         any_p = 1.0 - (1.0 - sc) * (1.0 - vsc)
-        out = {"f": f, "ex": ex, "sc": sc, "vsc": vsc, "any": any_p, "reason": reason,
+        f0 = {k: (v if k in ("early", "frac") else 0.0) for k, v in f.items()}  # no live signal at all: circuit and race stage only
+        base = 1.0 - (1.0 - m.prob("sc", f0)) * (1.0 - m.prob("vsc", f0))
+        out = {"f": f, "ex": ex, "sc": sc, "vsc": vsc, "any": any_p, "base": base, "reason": reason,
                "dy_n": sum(1 for s, v in self.tr.active.items() if v[1] == "dy" and t - v[0] <= YELLOW_EXPIRE),
                "y_n": sum(1 for s, v in self.tr.active.items() if v[1] == "y" and t - v[0] <= YELLOW_EXPIRE)}
         self._cache = (key, out)
@@ -543,7 +545,8 @@ class SafetyCarEngineer(Engineer):
             "vsc_prob_2laps": round(c["vsc"], 4),
             "neutral_prob_2laps": round(c["any"], 4),
             "sc_reason": c["reason"],
-            "sc_warn": bool(c["any"] >= ALERT_P),
+            "neutral_prob_base": round(c["base"], 4),
+            "sc_warn": warn_on(c),
             "dy_sectors": c["dy_n"],
             "y_sectors": c["y_n"],
             "yellow_age_s": round(f["yellow_age"] * 120.0, 1),
@@ -562,7 +565,7 @@ class SafetyCarEngineer(Engineer):
 
     def alerts(self, state, view):
         c = self._compute(state)
-        if c["any"] < ALERT_P:
+        if not warn_on(c):
             return []
         kind = "SC" if c["sc"] >= c["vsc"] else "VSC"
         since = self.tr.since(state.t)
@@ -571,8 +574,19 @@ class SafetyCarEngineer(Engineer):
                       data={"sc_prob_2laps": round(c["sc"], 4), "vsc_prob_2laps": round(c["vsc"], 4)})]
 
 
-FEED_STOP_ODDS = 3.0
-FEED_OFF_ODDS = 1.5
+# Measured on 2025 (docs): a slow car in telemetry has no usable lift (positive share 0.044 vs 0.029; multiplier 3 worsened log loss
+# 0.127 -> 0.133), so feed signals are exposed and named in reasons but do not move the probability.
+FEED_STOP_ODDS = 1.0
+FEED_OFF_ODDS = 1.0
+
+
+def warn_on(c: dict) -> bool:
+    """Warn when P(SC or VSC within 2 laps) reaches ALERT_P *and* is clearly above what the circuit alone gives
+    (a circuit with a high base rate must not warn on history alone)."""
+    return c["any"] >= ALERT_P and c["any"] >= WARN_OVER_BASE * c["base"]
+
+
+WARN_OVER_BASE = 1.5
 
 
 def _odds(p: float, mult: float) -> float:
