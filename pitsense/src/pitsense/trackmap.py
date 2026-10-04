@@ -30,6 +30,7 @@ from .state import replay
 N_OUTLINE = 400  # points of the closed lap polyline
 N_PIT = 60  # points of the pit-lane polyline
 MIN_SAMPLES = 120  # position samples a lap must have (about 5 Hz -> 25 s)
+MAX_GAP_S = 2.0  # a lap with a longer hole in its samples is skipped
 CLOSE_FRAC = 0.03  # first and last point of a lap must be this close, as a fraction of its length
 
 
@@ -77,7 +78,7 @@ def _best_lap(final, pos: dict[str, np.ndarray], utc_of) -> tuple[np.ndarray, st
         u1 = utc_of(lap.t_end)
         a = pos[lap.driver]
         seg = a[(a[:, 0] >= u1 - lap.lap_time) & (a[:, 0] <= u1) & (a[:, 3] > 0)]
-        if len(seg) < MIN_SAMPLES:
+        if len(seg) < MIN_SAMPLES or np.diff(seg[:, 0]).max() > MAX_GAP_S:
             continue
         xy = seg[:, 1:3]
         if np.hypot(*(xy[0] - xy[-1])) > CLOSE_FRAC * _length(xy):
