@@ -40,7 +40,7 @@ TASKS: list[str] = [
 
 # Extra models for the core tasks (bench/tasks.py), scored next to the built-in ones.
 TASK_MODELS: dict[str, list[str]] = {
-    "pit_within": [f"pitsense.bench.rivals:{n}" for n in ("RivalsPit", "RivalsPrior", "RivalsLogit", "RivalsLogitNoTeam", "RivalsGBM", "RivalsGBMNoTeam", "RivalsBlend")] + [f"pitsense.bench.rivalradio:{n}" for n in ("RRGBMWithout", "RRGBMWith")],  # every pit_within_k task
+    "pit_within": [f"pitsense.bench.rivals:{n}" for n in ("RivalsPit", "RivalsPrior", "RivalsLogit", "RivalsLogitNoTeam", "RivalsGBM", "RivalsGBMNoTeam", "RivalsBlend")],  # every pit_within_k task
     "position_after_stop": [
         "pitsense.bench.pitstop:PitstopRule",
         "pitsense.bench.pitstop:PitstopGBM",

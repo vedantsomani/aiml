@@ -133,7 +133,10 @@ def _decay(intent: str, dt: float) -> float:
 class RivalRadio(Engineer):
     name = "rivalradio"
     requires = ()  # alerts use the rivals engineer's gaps when it is on the wall
-    features = ("rr_box_intent", "rr_extend", "rr_push", "rr_save", "rr_tyres_gone", "rr_planchange",
+    # Model inputs: none. Radio covers ~6% of stops; the ablation showed no gain (docs/engineers/rivalradio.md).
+    # The values still feed alerts and the dashboard. RADIO_FEATURES lists them for a future ablation.
+    features = ()
+    RADIO_FEATURES = ("rr_box_intent", "rr_extend", "rr_push", "rr_save", "rr_tyres_gone", "rr_planchange",
                 "rr_cover", "rr_weather", "rr_problem", "rr_n", "rr_age_s")
     in_bench = True
 
