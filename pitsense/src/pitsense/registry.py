@@ -38,6 +38,7 @@ TASKS: list[str] = [
     "pitsense.bench.weather:weather_tasks",
     "pitsense.bench.safetycar:sc_tasks",
     "pitsense.bench.strategy:strategy_tasks",
+    "pitsense.bench.laps_to_stop:laps_to_stop_tasks",
 ]
 
 # Extra models for the core tasks (bench/tasks.py), scored next to the built-in ones.
@@ -57,6 +58,7 @@ LABELERS: list[str] = [
     "pitsense.bench.rivals:rivals_labels",
     "pitsense.bench.weather:weather_labels",
     "pitsense.bench.safetycar:safetycar_labels",
+    "pitsense.bench.laps_to_stop:stop_labels",
 ]
 
 # CLI extensions: f(subparsers) -> None, adding `pitsense <command>` parsers (cli.py).

@@ -67,6 +67,10 @@ def decide(a, prev_target: int | None, *, pit_open: bool = True, sc_phase: str =
     (``p1_box`` within this lap or ``p3_box`` within 3 laps). PREPARE_BOX: stopping within ``prep_laps`` laps costs
     at most ``tol_prep`` and a stop within 3 laps has probability ``p3_prep``. A call already made last lap is
     held down to ``hold`` x those thresholds. Without pit probabilities the plan alone decides (as before).
+
+    With the models bundle's laps-to-stop distribution (``a.ps``; ``use_stop_dist``) the gates are its CDF instead:
+    BOX needs the plan gain within ``tol_box`` and ``p_stop_le_1 >= q1_box``; PREPARE_BOX needs the gain within
+    ``tol_prep`` for a stop within ``prep_laps`` and ``p_stop_le_2 >= q2_prep``.
     """
     S = SETTINGS
     if a.plan_a is None or not a.ranked:
@@ -78,7 +82,19 @@ def decide(a, prev_target: int | None, *, pit_open: bool = True, sc_phase: str =
         return "STAY_OUT", None, min(0.97, max(0.5, _phi(d / se))), "no_stop_needed", A
     comp = A.stops[0][1]
     pp = getattr(a, "pp", None)
-    if pp is None or not S["use_hazard"]:
+    ps = getattr(a, "ps", None)
+    if ps is not None and S["use_stop_dist"]:
+        # the laps-to-stop model separates "a stop in 1-2 laps" from "in 4-8 laps": gate on its CDF, then on the plan's gain
+        h = S["hold"] if prev_call in ("BOX", "PREPARE_BOX") else 1.0
+        q1, q2 = ps[0], max(ps[0], ps[1])
+        g_now, g_win = _gap(a, A, 0, 0), _gap(a, A, 0, S["prep_laps"])
+        if g_now is not None and g_now <= S["tol_box"] / h and q1 >= S["q1_box"] * h:
+            if not pit_open:
+                return "PREPARE_BOX", comp, 0.6, "pit_lane_closed", A
+            return "BOX", comp, min(0.97, max(0.5, _phi(-d / se))), "box_now", A
+        if g_win is not None and g_win <= S["tol_prep"] / h and q2 >= S["q2_prep"] * h and q1 >= S["q1_prep"] * h:
+            return "PREPARE_BOX", comp, min(0.95, max(0.5, _phi(d / se))), "stop_soon", A
+    elif pp is None or not S["use_hazard"]:
         if A.first_offset == 0:
             if not pit_open:
                 return "PREPARE_BOX", comp, 0.6, "pit_lane_closed", A

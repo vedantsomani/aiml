@@ -96,7 +96,7 @@ def _patch_decide(trace: list, cur: dict) -> None:
         if a.plan_a is not None and a.ranked:
             trace.append({"drv": cur["drv"], "car_lap": cur["lap"], "car": a.car, "prev_target": prev_target, "kw": dict(kw),
                           "ranked": [(r.util, r.stops, r.first_offset) for r in a.ranked], "dnl": a.diff_now_later,
-                          "pp": a.pp, "gain_sc": a.gain_sc, "sc_comp": a.sc_best_comp, "anchor": a.anchor, "out": out[0]})
+                          "pp": a.pp, "ps": a.ps, "gain_sc": a.gain_sc, "sc_comp": a.sc_best_comp, "anchor": a.anchor, "out": out[0]})
         return out
 
     head.decide = rec
@@ -109,7 +109,7 @@ def replay_calls(trace: list[dict], final: RaceState, top5, decide_fn, k: int = 
     last, calls, last_key = {}, [], {}
     for r in trace:
         a = NS(plan_a=True, car=r["car"], anchor=r["anchor"], ranked=[NS(util=u, stops=s, first_offset=o) for u, s, o in r["ranked"]],
-               diff_now_later=r["dnl"], pp=r["pp"], gain_sc=r["gain_sc"], sc_best_comp=r["sc_comp"])
+               diff_now_later=r["dnl"], pp=r["pp"], ps=r.get("ps"), gain_sc=r["gain_sc"], sc_best_comp=r["sc_comp"])
         kw = dict(r["kw"])
         kw["prev_call"] = last.get(r["car"])
         act, comp = decide_fn(a, r["prev_target"], **kw)[:2]

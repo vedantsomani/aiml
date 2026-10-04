@@ -50,6 +50,7 @@ BEST_MODEL: dict[str, str] = {
     "tyre_cliff_3": "cliff_gbm",
     "fresh_tyre_pace": "fresh_gbm",
     "pit_loss": "pitstop_loss",
+    "laps_to_stop": "survival_gbm",
 }
 
 _SCORERS = {"binary": binary_scores, "position": position_scores, "regression": regression_scores}
@@ -90,7 +91,7 @@ class TrainedBundle:
         lines = [f"bundle {self.feature_version} @ {self.git_commit}: {len(self.trained_on)} races, "
                  f"training ends {self.train_end_utc:%Y-%m-%d %H:%M}Z, cutoff {self.cutoff_utc:%Y-%m-%d %H:%M}Z"]
         for task, m in self.metrics.items():
-            key = "log_loss" if m.get("kind") == "binary" else "mae"
+            key = {"binary": "log_loss", "survival": "ibs"}.get(m.get("kind"), "mae")
             lines.append(f"  {task:<20} {m['model']:<14} holdout {key} {m['scores'].get(key, float('nan')):.4f}"
                          f" (n={m['scores'].get('n', 0)})")
         return "\n".join(lines)
@@ -147,7 +148,12 @@ def _holdout(task: Task, cls, data: pd.DataFrame, races: list[str], holdout: int
                 warnings.simplefilter("ignore")
                 pred = cls().fit(fit, task.target).predict(test)
             out["holdout_races"] = hold
-            out["scores"] = _SCORERS[task.kind](test[task.target].to_numpy(float), np.asarray(pred, float))
+            if task.kind == "survival":  # the model predicts a CDF [n, 15]; scored against the rows' observed times
+                from .bench.laps_to_stop import survival_scores
+
+                out["scores"] = survival_scores(test, np.asarray(pred, float))
+            else:
+                out["scores"] = _SCORERS[task.kind](test[task.target].to_numpy(float), np.asarray(pred, float))
     return out
 
 

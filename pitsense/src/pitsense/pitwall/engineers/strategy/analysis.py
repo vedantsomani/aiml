@@ -43,6 +43,10 @@ SETTINGS = {
     "p3_prep": 0.20,  # PREPARE_BOX needs a stop probability within 3 laps of at least this
     "p1_prep": 0.05,  # PREPARE_BOX also needs a stop probability this lap of at least this
     "prep_near": None,  # PREPARE_BOX also needs stopping now to cost at most this many places (None: no such condition)
+    "use_stop_dist": True,  # head: time calls with the laps-to-stop distribution (models bundle) when it is there
+    "q1_box": 0.30,  # BOX needs P(stop within 1 lap) of at least this (and a plan gain within tol_box) ...
+    "q2_prep": 0.40,  # PREPARE_BOX needs P(stop within 2 laps) of at least this (and a plan gain within tol_prep)
+    "q1_prep": 0.0,  # ... and P(stop within 1 lap) of at least this
     "hold": 0.7,  # a box call made last lap is held down to this share of the thresholds
     "tol_keep": 0.05,  # keep last lap's target stop lap unless the best plan is better by more than this
 }
@@ -108,6 +112,7 @@ class CarAnalysis:
     sc_prob5: float = 0.0
     sc_best_comp: str | None = None
     pp: tuple | None = None  # the car's pit probabilities within 1 / 3 / 5 laps as the simulator was given them
+    ps: tuple | None = None  # the models' P(stop within 1 / 2 / 3 / 5 / 8 laps) and median laps to the stop (None: no bundle)
     stop_p: tuple = ()  # share of simulated futures (default strategy) with the first stop at offset 0..11 laps from the next lap
     ms: float = 0.0
     n_sims: int = 0
@@ -206,6 +211,8 @@ def build_field(state, view, memory, ctx, pri: Priors, A: int) -> tuple[FieldIn,
         pp3 = pr[1] if pr[1] is not None else _num(rv.get("pit_prob_3"), 0.15)
         pp5 = _num(rv.get("pit_prob_5"), 0.25)
         F.pp[i] = (pp1, max(pp1, pp3), max(pp1, pp3, pp5))
+        ps = [_num(md.get(k)) for k in ("p_stop_le_1", "p_stop_le_2", "p_stop_le_3", "p_stop_le_5", "p_stop_le_8", "laps_to_stop_med")]
+        info.setdefault("ps", {})[n] = tuple(ps) if None not in ps else None
         F.must[i] = bool(rl.get("must_stop"))
         for comp in (d.compounds_used or []) + [d.compound]:
             if comp in CIDX:
@@ -367,6 +374,7 @@ def analyse_focus(F: FieldIn, info: dict, run: FieldRun, D: Draws, number: str, 
     plans = candidates(F, c, info, number)
     out.n_plans = len(plans)
     out.pp = tuple(float(x) for x in F.pp[c])
+    out.ps = info.get("ps", {}).get(number)
     s0 = run.stop[:, c, 0] - (A + 1)
     out.stop_p = tuple(float(np.mean(s0 == o)) for o in range(12))
     if not plans:

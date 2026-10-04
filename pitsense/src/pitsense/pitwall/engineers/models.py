@@ -7,6 +7,8 @@ this engineer builds the decision row exactly as the benchmark does
 bundle:
 
 * ``pit_prob_1`` / ``pit_prob_3``: the row at the car's latest lap end (``lap_end``);
+* ``p_stop_le_1/2/3/5/8``, ``laps_to_stop_exp``, ``laps_to_stop_med``: the survival model's distribution of
+  the laps to the car's next stop (``bench.laps_to_stop``), from the same lap-end row;
 * ``rejoin_pred``: the row of a stop made now (``pit_entry`` at the next lap), the
   position the car would rejoin in.
 
@@ -21,7 +23,9 @@ import numpy as np
 from ...bench.features import base_row, bench_engineers
 from ..engineer import Engineer
 
-KEYS = ("pit_prob_1", "pit_prob_3", "rejoin_pred")
+STOP_KEYS = ("p_stop_le_1", "p_stop_le_2", "p_stop_le_3", "p_stop_le_5", "p_stop_le_8", "laps_to_stop_exp",
+             "laps_to_stop_med")
+KEYS = ("pit_prob_1", "pit_prob_3", "rejoin_pred") + STOP_KEYS
 _NONE = dict.fromkeys(KEYS)
 
 
@@ -68,6 +72,7 @@ class ModelsEngineer(Engineer):
         if lap_end is not None:
             for h, key in ((1, "pit_prob_1"), (3, "pit_prob_3")):
                 out[key] = _one(bundle, f"pit_within_{h}", lap_end)
+            out.update(_stop_distribution(bundle, lap_end))
         if pit_entry is not None:
             out["rejoin_pred"] = _one(bundle, "position_after_stop", pit_entry)
         return out
@@ -81,3 +86,17 @@ def _one(bundle, task: str, row: dict):
     df = pd.DataFrame([{k: (np.nan if v is None else v) for k, v in row.items()}])
     p = float(bundle.predict(task, df)[0])
     return p if np.isfinite(p) else None
+
+
+def _stop_distribution(bundle, row: dict) -> dict:
+    """``p_stop_le_k`` (k = 1, 2, 3, 5, 8), expected and median laps to the next stop; None without the model."""
+    if "laps_to_stop" not in bundle.models:
+        return {}
+    import pandas as pd
+
+    from ...bench.laps_to_stop import summarize
+
+    df = pd.DataFrame([{k: (np.nan if v is None else v) for k, v in row.items()}])
+    s = summarize(np.asarray(bundle.models["laps_to_stop"].predict_cdf(df), float))
+    out = {k: float(v[0]) for k, v in s.items()}
+    return out if all(np.isfinite(v) for v in out.values()) else {}

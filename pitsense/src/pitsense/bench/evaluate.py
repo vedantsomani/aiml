@@ -50,6 +50,12 @@ def fit_predict(cls, train: pd.DataFrame, test: pd.DataFrame, target: str) -> np
     return cls().fit(train, target).predict(test)
 
 
+def fit_predict_cdf(cls, train: pd.DataFrame, test: pd.DataFrame) -> np.ndarray:
+    """As :func:`fit_predict` for survival models: the [n, 15] CDF P(stop within k laps). Same cutoff guard."""
+    assert_trained_before([train.start_utc.max() + RACE_SPAN], test.start_utc.min())
+    return cls().fit(train).predict_cdf(test)
+
+
 def evaluate_task(task: Task, df: pd.DataFrame, test_year: int = 2026, min_train_races: int = 10) -> EvalResult:
     if task.evaluate is not None:
         return task.evaluate(df, test_year=test_year, min_train_races=min_train_races)

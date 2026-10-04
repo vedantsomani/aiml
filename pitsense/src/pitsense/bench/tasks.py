@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 import pandas as pd
 
-KINDS = ("binary", "position", "regression")
+KINDS = ("binary", "position", "regression", "survival")
 
 
 @dataclass(frozen=True)
