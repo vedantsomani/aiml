@@ -8,8 +8,12 @@
     GET /api/stream        server-sent events: "snapshot" (the snapshot JSON), "pos" (car positions, ~3 Hz), "status"
     GET /api/radio.wav     ?car=N[&i=ID]: our pit wall's message (latest, or by id), spoken (Piper TTS; 404 if not installed)
     GET /api/teamradio     ?car=N&i=K: the K-th real driver radio mp3 of car N (published clips only, audio/mpeg)
+    POST /api/ask          {"car": "16", "text": "what if we box now?"}: answer a what-if or fact question; the Q&A joins the
+                           conversation and the answer can be spoken via /api/radio.wav?car=N&i=<reply id>
+    POST /api/ask_audio    ?car=N, body = recorded audio (webm/opus, ogg, wav): transcribed on the server, then as /api/ask
 
-Read-only: no endpoint changes anything. Binds to 127.0.0.1 unless told otherwise.
+The GET endpoints are read-only; the two POSTs only add a question and its answer to the conversation. Binds to
+127.0.0.1 unless told otherwise; a POST from a page on another origin is refused.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from pathlib import Path
 STATIC = Path(__file__).parent
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
          ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml"}
+MAX_BODY = 8_000_000  # bytes: a question is a sentence; a recording a few seconds of opus
 PAGES = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
 
 
@@ -75,6 +80,48 @@ def _handler(rt):
             if f is None:
                 return self._json({"error": "no such radio clip"}, 404)
             self._send(f.read_bytes(), "audio/mpeg")
+
+        def _same_origin(self) -> bool:
+            """A browser page on another site must not drive the local pit wall (no CORS, and Origin must match Host)."""
+            from urllib.parse import urlsplit
+
+            origin = self.headers.get("Origin")
+            return origin is None or urlsplit(origin).netloc == self.headers.get("Host", "")
+
+        def _body(self) -> bytes | None:
+            n = self.headers.get("Content-Length", "")
+            if not n.isdigit() or int(n) > MAX_BODY:
+                self._json({"ok": False, "error": "missing or too large body"}, 413)
+                return None
+            return self.rfile.read(int(n))
+
+        def do_POST(self) -> None:  # noqa: N802
+            from urllib.parse import parse_qs
+
+            path, _, query = self.path.partition("?")
+            try:
+                if path not in ("/api/ask", "/api/ask_audio"):
+                    return self._json({"error": "not found"}, 404)
+                if not self._same_origin():
+                    return self._json({"ok": False, "error": "cross-origin request refused"}, 403)
+                body = self._body()
+                if body is None:
+                    return
+                if path == "/api/ask":
+                    try:
+                        req = json.loads(body.decode("utf-8") or "{}")
+                        car, text = str(req.get("car") or ""), str(req.get("text") or "")
+                    except (ValueError, AttributeError):
+                        return self._json({"ok": False, "error": "body must be JSON: {car, text}"}, 400)
+                    out = rt.ask(car, text)
+                else:
+                    car = (parse_qs(query).get("car") or [""])[0]
+                    out = rt.ask_audio(car, body)
+                self._json(out, 200 if out.get("ok") else 422 if out.get("error") in ("no speech heard", "empty question") else 503)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass
+            except Exception as exc:  # the loop must never be hurt by a bad question
+                self._json({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, 500)
 
         def do_GET(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]

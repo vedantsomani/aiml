@@ -37,7 +37,14 @@
     </section>
     <section class="panel" id="qpanel" hidden><h2>Qualifying <small id="qnote"></small></h2><div id="qsum"></div>
       <table id="qtab"><thead><tr><th>P</th><th>CAR</th><th>BEST</th><th>TO CUT</th><th>KO %</th><th>SEND</th></tr></thead><tbody></tbody></table></section>
-    <section class="panel"><h2>Pit wall radio <small>our cars</small><button id="radiobtn" onclick="flipRadio(this)">radio off</button></h2><div id="convo" class="convo"></div></section>
+    <section class="panel"><h2>Pit wall radio <small>our cars</small><button id="radiobtn" onclick="flipRadio(this)">radio off</button></h2><div id="convo" class="convo"></div>
+      <form id="askform" class="askform" autocomplete="off">
+        <select id="askcar" title="which car to ask about" hidden></select>
+        <input id="asktext" type="text" maxlength="300" placeholder="Ask the pit wall: what if we box now? gap ahead? safety car next lap?" aria-label="question">
+        <button id="askbtn" type="submit">Ask</button>
+        <button id="micbtn" type="button" title="hold to talk" aria-label="hold to talk">&#127908;</button>
+      </form>
+      <div id="askstat" class="askstat" aria-live="polite"></div></section>
     <section class="panel"><h2>Our cars <small id="focusnote"></small></h2><div id="focus"></div></section>
     <section class="panel"><h2>Alerts</h2><div id="alerts"></div></section>
     <section class="panel"><h2>Race control</h2><div id="rc"></div></section>

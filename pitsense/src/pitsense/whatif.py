@@ -176,6 +176,8 @@ def parse_question(text: str, tla_of: dict[str, str] | None = None, car: str | N
         spec = _spec(re.sub(_SC, " ", q)) if box and not re.search(r"\b(?:what if|if)\s+(?:a |the )?(?:" + _SC + ")", q) else None
         return Question(raw, "sc", options=(spec,) if spec and box else (), sc_in=k,
                         vsc=bool(re.search(r"\bvsc\b|v s c|virtual", q)), rival=rival, rival_ref=ref)
+    if re.search(r"^(?:why|what is the reason|what are the reasons|explain)\b", q):
+        return Question(raw, "fact", fact="why")
     if re.search(_STAY, q) and not re.search(r"\bwhen\b", q):
         parts = re.split(_SPLIT, q, maxsplit=1)
         opts = tuple(s for s in (_spec(p) for p in parts) if s)

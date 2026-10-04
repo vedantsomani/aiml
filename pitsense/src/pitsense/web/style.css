@@ -87,3 +87,12 @@ td.p{font-weight:700;width:34px}
 #qtab tr.mine td{outline:1px solid var(--accent)}
 #qtab td.critical{color:#ff6b6b;font-weight:700}
 #qsum{font-size:12px;color:var(--dim)}
+.msg.you{align-self:flex-end}.msg.you .bub{background:#1a2133;border-color:#33426b}.msg.you .who{text-align:right}
+.msg.wallmsg .src{margin-left:6px;font-size:10px;color:#5d6875}
+.askform{display:flex;gap:6px;margin-top:8px}
+.askform input{flex:1;min-width:0;font:inherit;padding:5px 9px;background:#0a0d11;color:var(--fg);border:1px solid var(--line);border-radius:6px}
+.askform input:focus{outline:1px solid var(--accent)}
+.askform select,.askform button{font:inherit;padding:4px 10px;background:#1b2633;color:var(--fg);border:1px solid #3a4d63;border-radius:6px;cursor:pointer}
+#micbtn{user-select:none;touch-action:none}
+#micbtn.rec{background:#7a1d1d;border-color:var(--red);box-shadow:0 0 0 2px #ff3b3055}
+.askstat{min-height:16px;margin-top:4px;font-size:11px;color:var(--dim)}

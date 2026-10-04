@@ -174,6 +174,7 @@ function flipRadio(btn) {
 
 // ---- conversation: real driver radio + our pit wall (voice calls, engineer alerts), oldest first
 let radioList = [];
+const asked = [];  // our questions and the answers from /api/ask (the snapshot catches up later)
 const seenMsgs = new Set();
 let convoSig = "", convoItems = [];
 function convoEntries(s) {
@@ -184,15 +185,19 @@ function convoEntries(s) {
     out.push({id: "d" + m.id, kind: "driver", car: m.car, tla: m.tla || tla[m.car] || m.car, t: m.t, lap: m.lap,
       text: m.text, url: m.audio, n: 0});
   }
-  for (const m of x.wall_msgs || []) {
-    if (m.kind === "alert") {
+  const wm = (x.wall_msgs || []).slice();
+  for (const p of asked) if (!wm.some((w) => w.id === p.id)) wm.push(p);  // answers newer than the snapshot
+  for (const m of wm) {
+    if (m.kind === "you") {
+      out.push({id: "y" + m.id, kind: "you", car: m.car, tla: tla[m.car] || m.car, t: m.t, lap: m.lap, text: m.text, voice: m.source === "voice", n: m.id});
+    } else if (m.kind === "alert") {
       if (m.car ? !mine.has(m.car) : m.severity !== "critical") continue;
       out.push({id: "a" + m.id, kind: "alert", car: m.car, tla: m.car ? tla[m.car] || m.car : "", t: m.t, lap: m.lap,
         text: m.text, who: m.engineer, sev: m.severity, n: m.id});
     } else {
-      if (!mine.has(m.car)) continue;
+      if (!mine.has(m.car) && !m.ask) continue;
       out.push({id: "w" + m.id, kind: "wall", car: m.car, tla: tla[m.car] || m.car, t: m.t, lap: m.lap, text: m.text,
-        action: m.action, url: "/api/radio.wav?car=" + encodeURIComponent(m.car) + "&i=" + m.id, n: m.id});
+        action: m.action, src: m.ask ? m.source : null, url: "/api/radio.wav?car=" + encodeURIComponent(m.car) + "&i=" + m.id, n: m.id});
     }
   }
   return out.sort((a, b) => a.t - b.t || a.n - b.n);
@@ -206,11 +211,15 @@ function msgHtml(m, colours) {
       (col ? "#" + esc(col) : "#444") + '"></span><b>' + esc(m.tla) + '</b> driver <span class="when">' + when + "</span></div>" +
       '<div class="bub">' + play + '<span class="txt">' + txt + "</span></div></div>";
   }
+  if (m.kind === "you")
+    return '<div class="msg you" data-id="' + esc(m.id) + '"><div class="who"><b>YOU</b>' + (m.voice ? " (voice)" : "") + " &rarr; " + esc(m.tla) +
+      ' <span class="when">' + when + '</span></div><div class="bub">' + esc(m.text) + "</div></div>";
   if (m.kind === "alert")
     return '<div class="msg alert-msg ' + esc(m.sev) + '" data-id="' + esc(m.id) + '"><div class="who"><b>' + esc(m.who || "engineer") +
       "</b>" + (m.tla ? " &rarr; " + esc(m.tla) : "") + ' <span class="when">' + when + '</span></div><div class="bub">' + esc(m.text) + "</div></div>";
   return '<div class="msg wallmsg" data-id="' + esc(m.id) + '"><div class="who"><b>PIT WALL</b> &rarr; ' + esc(m.tla) +
     (m.action ? ' <span class="act ' + esc(m.action) + '">' + esc(String(m.action).replace(/_/g, " ")) + "</span>" : "") +
+    (m.src ? ' <span class="src">' + esc(m.src) + "</span>" : "") +
     ' <span class="when">' + when + '</span></div><div class="bub">' + play + '<span class="txt">' + esc(m.text) + "</span></div></div>";
 }
 function renderConvo(s) {
@@ -224,6 +233,7 @@ function renderConvo(s) {
     if (!seenMsgs.has(k)) { seenMsgs.add(k); fresh.push(k); }
   }
   if (!first && radioOn) for (const m of items) if (fresh.includes(m.id) && m.url) enqueue(m);
+  syncAskCars(s);
   const sig = items.map((m) => m.id + (m.text != null ? "+" : "-")).join(",") + "|" + [...focusSet()].join(",");
   if (sig === convoSig) return;
   convoSig = sig;
@@ -241,6 +251,81 @@ $("convo").addEventListener("click", (e) => {
   if (m && m.url) enqueue(m);
 });
 $("radiobtn").textContent = radioOn ? "radio on" : "radio off";
+
+// ---- ask the pit wall: a text box and a push-to-talk microphone. Both end in the same conversation.
+function syncAskCars(s) {
+  const sel = $("askcar"), tla = {};
+  for (const r of s.tower || []) tla[r.car] = r.tla;
+  const cars = [...focusSet()].filter((n) => tla[n]);
+  const sig = cars.join(",");
+  if (sel.dataset.sig === sig) return;
+  sel.dataset.sig = sig;
+  const keep = sel.value;
+  sel.innerHTML = cars.map((n) => '<option value="' + esc(n) + '">' + esc(tla[n]) + "</option>").join("");
+  if (cars.includes(keep)) sel.value = keep;
+  sel.hidden = cars.length < 2;
+}
+const askCar = () => $("askcar").value || (snap && snap.focus && snap.focus[0]) || [...pinned][0] || "";
+function askStat(t) { $("askstat").textContent = t || ""; }
+function handleAsk(r) {
+  if (!r || !r.ok) { askStat((r && r.error) || "no answer"); return; }
+  for (const m of [r.you, r.reply]) { asked.push(m); seenMsgs.add((m.kind === "you" ? "y" : "w") + m.id); }
+  while (asked.length > 60) asked.shift();
+  askStat((r.heard ? 'heard: "' + r.heard + '"   ' : "") + r.source + ", " + r.ms + " ms");
+  convoSig = "";
+  if (snap) renderConvo(snap);
+  const box = $("convo");
+  box.scrollTop = box.scrollHeight;
+  enqueue({id: "w" + r.reply.id, kind: "wall", text: r.reply.text, url: r.audio});  // an answer is always spoken
+}
+function sendAsk(text) {
+  askStat("asking the pit wall...");
+  fetch("/api/ask", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({car: askCar(), text})})
+    .then((r) => r.json()).then(handleAsk).catch(() => askStat("the pit wall did not answer"));
+}
+$("askform").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const t = $("asktext").value.trim();
+  if (!t) return;
+  $("asktext").value = "";
+  sendAsk(t);
+});
+let rec = null, micStream = null, micChunks = [], micWant = false, micT0 = 0;
+async function micStart() {
+  if (rec || micWant) return;
+  micWant = true;
+  if (!navigator.mediaDevices || !window.MediaRecorder) { micWant = false; askStat("the microphone needs a browser with MediaRecorder, on localhost or https"); return; }
+  try { micStream = await navigator.mediaDevices.getUserMedia({audio: true}); }
+  catch (e) { micWant = false; askStat("microphone blocked: " + e.name); return; }
+  if (!micWant) { micStream.getTracks().forEach((t) => t.stop()); return; }  // released before it was ready
+  const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"].find((m) => MediaRecorder.isTypeSupported(m));
+  rec = new MediaRecorder(micStream, mime ? {mimeType: mime} : {});
+  micChunks = [];
+  rec.ondataavailable = (e) => { if (e.data && e.data.size) micChunks.push(e.data); };
+  rec.onstop = () => {
+    micStream.getTracks().forEach((t) => t.stop());
+    const blob = new Blob(micChunks, {type: (rec && rec.mimeType) || "audio/webm"});
+    rec = null; micWant = false;
+    $("micbtn").classList.remove("rec");
+    if (Date.now() - micT0 < 400 || blob.size < 1000) { askStat("too short: hold the button while you speak"); return; }
+    askStat("listening to the recording...");
+    fetch("/api/ask_audio?car=" + encodeURIComponent(askCar()), {method: "POST", headers: {"Content-Type": blob.type}, body: blob})
+      .then((r) => r.json()).then(handleAsk).catch(() => askStat("the pit wall did not answer"));
+  };
+  micT0 = Date.now();
+  rec.start();
+  $("micbtn").classList.add("rec");
+  askStat("recording: release to send");
+}
+function micStop() {
+  micWant = false;
+  if (rec && rec.state === "recording") rec.stop();
+}
+const mic = $("micbtn");
+mic.addEventListener("pointerdown", (e) => { e.preventDefault(); micStart(); });
+for (const ev of ["pointerup", "pointerleave", "pointercancel"]) mic.addEventListener(ev, micStop);
+mic.addEventListener("keydown", (e) => { if ((e.key === " " || e.key === "Enter") && !e.repeat) { e.preventDefault(); micStart(); } });
+mic.addEventListener("keyup", (e) => { if (e.key === " " || e.key === "Enter") micStop(); });
 
 // ---- track map: outline, pit lane, start line and one dot per car, animated between position updates.
 // Without an outline the map draws the trails the cars leave. The view is rotated so the circuit's long

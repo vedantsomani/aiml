@@ -244,6 +244,10 @@ class PitWallRuntime:
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.lock = threading.Lock()
+        self.sim_lock = threading.RLock()  # the loop applies an event under it; /api/ask reads a still state under it
+        self._voice_lock = threading.Lock()
+        self.transcriber = None  # bytes -> text for /api/ask_audio (default: pitsense.asr.transcribe)
+        self._ask_tpl = None
         self.listeners: list[queue.Queue] = []
         self.latest: dict | None = None
         self.latest_bytes: bytes = _json_bytes({"waiting": True})
@@ -372,7 +376,8 @@ class PitWallRuntime:
                     self._build_wall()
                 self.handle(e)
             if self.wall is not None:
-                self.publish(force=True)
+                with self.sim_lock:
+                    self.publish(force=True)
             self.status = "stopped" if self.stop_event.is_set() else "finished"
         except Exception as exc:
             log.exception("pit wall loop failed")
@@ -383,6 +388,10 @@ class PitWallRuntime:
             self._notify({"event": "status", "status": self.status})
 
     def handle(self, e: _events.Event) -> None:
+        with self.sim_lock:
+            self._handle(e)
+
+    def _handle(self, e: _events.Event) -> None:
         state = self.state
         state.apply(e)
         self.n_events += 1
@@ -580,7 +589,8 @@ class PitWallRuntime:
                 return None
             from ..voice.api import say
 
-            return say(call, snap, self.voice)
+            with self._voice_lock:
+                return say(call, snap, self.voice)
         except Exception:
             log.exception("voice failed; continuing without it")
             self.voice = False
@@ -697,6 +707,123 @@ class PitWallRuntime:
             return None
         r = self.radio.get(car)
         return r["text"] if r else None
+
+    # --------------------------------------------------------------- ask the pit wall
+    def _ask_voice(self):
+        """The voice for answers: the loaded model, or templates only when the voice is off (or failed)."""
+        from ..voice.api import Voice
+
+        if self.voice is False:
+            if self._ask_tpl is None:
+                self._ask_tpl = Voice(use_model=False)
+            return self._ask_tpl
+        if self.voice is None:
+            self.voice = Voice()
+        return self.voice
+
+    def _push_wall(self, **m) -> dict:
+        with self.sim_lock:
+            self._wall_id += 1
+            m = {"id": self._wall_id, "t": round(self.state.t, 1), "lap": self.state.current_lap, "ask": True, **m}
+            self.wall_msgs.append(m)
+            return m
+
+    def ask(self, car: str | None, text: str, *, source: str = "text") -> dict:
+        """Answer a question about ``car`` as of now: a what-if on the simulator, or a fact through the voice.
+
+        Adds the question ("you") and the answer (pit wall, spoken via ``/api/radio.wav?i=<id>``) to the conversation.
+        """
+        from .. import whatif
+        from ..voice import api as vapi
+        from ..voice.facts import from_snapshot
+        from .types import Call
+
+        text = " ".join((text or "").split())[:300]
+        if not text:
+            return {"ok": False, "error": "empty question"}
+        t0 = time.perf_counter()
+        res = None
+        with self.sim_lock:
+            state = self.state
+            if self.wall is None or self._wall_quali or not state.drivers:
+                return {"ok": False, "error": "the pit wall has no race data yet"}
+            if not car or car not in state.drivers:
+                focus = self.team.focus(state)
+                order = [d.number for d in state.running_order() if d.running]
+                car = focus[0] if focus else (order[0] if order else next(iter(state.drivers)))
+            tla_of = {n: d.tla for n, d in state.drivers.items()}
+            q = whatif.parse_question(text, tla_of, car)
+            snap = None
+            if q.kind in ("whatif", "sc"):
+                res = whatif.what_if(self.wall, state, car, q)
+                answer, src = res["answer"], "whatif"
+            else:
+                snap = self.wall.snapshot(state)
+                call = next((c for c in snap.calls if c.car == car), None) or Call(snap.t, car, "NO_CALL")
+                nb = {"ahead": snap.cars.get(car, {}).get("rivals__ahead"), "behind": snap.cars.get(car, {}).get("rivals__behind")}
+        you = self._push_wall(kind="you", car=car, text=text, source=source)
+        if snap is not None:
+            try:
+                with self._voice_lock:
+                    answer, src = self._fact_answer(q, snap, call, nb, state, car, from_snapshot, vapi)
+            except Exception:
+                log.exception("voice failed on a question; using the template")
+                self.voice = False
+                with self._voice_lock:
+                    answer, src = self._fact_answer(q, snap, call, nb, state, car, from_snapshot, vapi)
+        reply = self._push_wall(kind="voice", car=car, text=answer, action=None, source=src)
+        return {"ok": True, "car": car, "tla": tla_of.get(car, car), "you": you, "reply": reply, "answer": answer, "source": src,
+                "intent": q.to_dict(), "whatif": res, "audio": f"/api/radio.wav?car={car}&i={reply['id']}",
+                "ms": round((time.perf_counter() - t0) * 1000)}
+
+    def _fact_answer(self, q, snap, call, nb, state, car, from_snapshot, vapi) -> tuple[str, str]:
+        voice = self._ask_voice()
+        facts = from_snapshot(call, snap)
+        tla = {n: d.tla for n, d in state.drivers.items()}
+        src = lambda r: r.source  # noqa: E731
+        if q.fact == "sc_prob":
+            p = snap.race.get("strategy__sc_prob_5")
+            if isinstance(p, (int, float)):
+                return f"A safety car in the next five laps is {int(round(100 * p))} percent likely.", "facts"
+        elif q.fact == "gap":
+            ref = q.rival_ref
+            target = q.rival or q.target
+            if target is None and ref:
+                target = nb.get(ref)
+            if target is not None:
+                near = {x.car for x in (facts.ahead, facts.behind) if x}
+                if str(target) in near:
+                    r = voice.write(facts, "ask_gap", str(target))
+                    return r.text, src(r)
+                a, b = state.drivers.get(car), state.drivers.get(str(target))
+                if a and b and a.gap_to_leader is not None and b.gap_to_leader is not None:
+                    d = b.gap_to_leader - a.gap_to_leader
+                    return f"{tla.get(str(target), target)} is {abs(d):.1f} seconds {'behind' if d > 0 else 'ahead of'} {a.tla}.", "facts"
+        elif q.fact in ("tyre_age", "pit_window", "plan_b", "why"):
+            r = voice.write(facts, f"ask_{q.fact}", None)
+            return r.text, src(r)
+        r = voice.write(facts, "free", q.text.strip().lower().rstrip("?"))
+        return r.text, src(r)
+
+    def ask_audio(self, car: str | None, data: bytes) -> dict:
+        """Transcribe a spoken question (browser audio) and answer it like a typed one."""
+        fn = self.transcriber
+        if fn is None:
+            from .. import asr
+
+            fn = asr.transcribe
+        t0 = time.perf_counter()
+        try:
+            heard = fn(data)
+        except Exception as exc:
+            log.warning("transcription failed: %s", exc)
+            return {"ok": False, "error": f"could not transcribe the audio: {type(exc).__name__}: {exc}"}
+        if not heard or not heard.strip():
+            return {"ok": False, "error": "no speech heard", "heard": ""}
+        out = self.ask(car, heard, source="voice")
+        out["heard"] = heard
+        out["asr_ms"] = round((time.perf_counter() - t0) * 1000) - out.get("ms", 0)
+        return out
 
     def calls(self) -> dict:
         with self.lock:
