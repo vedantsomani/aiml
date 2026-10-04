@@ -216,7 +216,9 @@ class _Check:
 
 class CarTrack:
     def __init__(self) -> None:
-        self.last_utc = -1.0
+        self.last_utc = -1.0  # newest sample measured
+        self.seen_utc = -1.0  # newest sample received
+        self.held = None  # the newest batch, measured at the next ingest
         self.pw = _Check()  # full-throttle speed / field speed in the cell
         self.rp = _Check()  # full-throttle rpm / field rpm in the cell
         self.gr = _Check()  # |rpm/speed| / field ratio of the gear (signed, stable gear)
@@ -305,23 +307,28 @@ class MechanicTelemetry(Engineer):
             utc = data["utc"]
             if len(utc) == 0:
                 continue
-            new = utc > tr.last_utc
+            new = utc > tr.seen_utc
             if not new.any():
                 continue
             pos = tel.position_history(car, last_s=span + 4.0)
-            b = self._prepare(tr, data, pos, new)
+            b_new = self._prepare(tr, data, pos, new)
+            tr.seen_utc = float(utc[-1])
             car_ok = d is not None and self._car_ok(state, d)
-            ok = gate and car_ok
-            batches.append((car, tr, b, ok, loose and car_ok))
+            clear = d is not None and (d.interval is None or d.interval >= CLEAR_GAP_S)  # no slipstream
+            # A batch is measured one ingest late, and only if the car was still fine afterwards: the timing
+            # feed flags "in pit" a few seconds after the car has slowed for the pit entry.
+            held, tr.held = tr.held, (b_new, gate and car_ok, loose and car_ok, clear)
+            if held is None:
+                continue
+            hb, hok, hlo, hclear = held
+            batches.append((car, tr, hb, hok and car_ok, hlo and car_ok, hclear))
         # all cars are measured against the reference as it stood before this ingest
         pending = []
         stills = []
-        for car, tr, b, ok, lo in batches:
+        for car, tr, b, ok, lo, clear_air in batches:
             if b is not None and lo:
                 stills.append((tr, *self._still(b)))
             if b is not None and ok:
-                d = state.drivers[car]
-                clear_air = d.interval is None or d.interval >= CLEAR_GAP_S  # no slipstream to inflate the baseline
                 pending.append((tr, self._measure(tr, b, clear_air)))
             if b is not None:
                 tr.last_utc = float(b["utc"][-1])
@@ -337,10 +344,10 @@ class MechanicTelemetry(Engineer):
             for tr, p in pending:
                 if len(p[key][0]):
                     getattr(tr, key).feed(p[key][0], p[key][1] / common)
-        for car, tr, b, ok, lo in batches:
+        for car, tr, b, ok, lo, _ in batches:
             if b is not None and ok:
                 self._learn(b)
-        for car, tr, b, ok, lo in batches:
+        for car, tr, b, ok, lo, _ in batches:
             self._score(tr, state.t)
 
     @staticmethod

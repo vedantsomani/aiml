@@ -171,11 +171,19 @@ def test_frozen_position_feed_is_not_a_slow_car():
 
 
 def test_neutral_while_moving_is_a_gearbox_flag():
-    st, wall, _ = run(feed_events("33", "gearbox"))
-    v = wall.view(st).car("mechanic_telemetry", "33")
-    assert v["gearbox"] is not None and v["gearbox"] > 0.6
-    assert v["mech_issue"] == "gearbox"
-    assert (wall.view(st).car("mechanic_telemetry", "11")["gearbox"] or 0) < 0.3
+    log = make_log(feed_events("33", "gearbox"))
+    st = RaceState(log.meta)
+    wall = PitWall(Context(prior=PitLossPrior(), meta=log.meta), engineers=[MechanicTelemetry])
+    best, best_other, flagged = 0.0, 0.0, False
+    for i, e in enumerate(log.events):
+        st.apply(e)
+        wall.observe(st)
+        if i % 40 == 0 and st.t > FAULT_T:
+            v = wall.view(st)
+            best = max(best, v.car("mechanic_telemetry", "33")["gearbox"] or 0.0)
+            best_other = max(best_other, v.car("mechanic_telemetry", "11")["gearbox"] or 0.0)
+            flagged |= any(a.car == "33" and a.code == "mech_gearbox" for a in wall.alerts(st))
+    assert best > 0.6 and flagged and best_other < 0.3
 
 
 def test_chief_combines_telemetry_into_one_alert_with_a_reason():
