@@ -144,6 +144,11 @@ class HeadOfStrategy(Engineer):
             a = res.get(n)
             d = state.drivers[n]
             t = round(state.t, 3)
+            if a is not None and not a.ok and a.why.startswith("wet conditions"):  # no wet model (or engine off): the naive rain-flag rule
+                action, comp, rs = wethead.naive_call(view, state, n, priors_for(self.ctx))
+                self._last[n] = action
+                out.append(Call(t=t, car=n, action=action, compound=comp, confidence=0.4, reasons=tuple(rs)))
+                continue
             if a is None or not a.ok:
                 why = a.why if a is not None else "no plan"
                 out.append(Call(t=t, car=n, action="NO_CALL", reasons=(Reason("no_plan", why),)))

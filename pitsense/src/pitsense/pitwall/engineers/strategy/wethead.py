@@ -6,14 +6,14 @@ from __future__ import annotations
 from ...types import Plan, PlanStop, Reason
 from .wetsim import CLASS_NAMES
 
-# decision settings (tuned on 2018-2024 wet races; docs/engineers/strategy.md)
+# decision settings (grid on the 2018-2024 wet races, F1 of switch-call precision/recall; docs/engineers/strategy.md)
 HEAD_WET = {
-    "g_box": 5.0,  # BOX: switching this lap beats the best later-or-never plan by this many seconds over the race
-    "p_box": 0.70,  # ... in at least this share of futures
+    "g_box": 10.0,  # BOX: switching this lap beats the best later-or-never plan by this many seconds over the race
+    "p_box": 0.85,  # ... in at least this share of futures
     "g_prep": 3.0,  # PREPARE_BOX: the best plan switches within prep_laps laps and gains this over staying
     "p_prep": 0.60,
     "prep_laps": 2,
-    "hold": 0.7,  # a box call made last lap is held down to this share of the thresholds
+    "hold": 0.5,  # a box call made last lap is held down to this share of the thresholds
 }
 NAME = {"SLICKS": "SLICKS", "INTERMEDIATE": "INTERS", "WET": "WETS"}
 
@@ -101,3 +101,25 @@ def plans(a, pri) -> tuple[Plan, Plan | None]:
     elif wr.later is not None and wr.later.switches != wr.best.switches:
         pb = Plan("B", conv(wr.later.switches), None, None, "if Plan A cannot be followed")
     return pa, pb
+
+
+# naive rule (fallback when the wet engine is off or has no model): switch when the rain flag says so
+NAIVE = {"rain_min": 2.0, "dry_min": 5.0}
+
+
+def naive_call(view, state, number: str, pri):
+    """(action, compound, reasons) for the rule "BOX for INTERS once the rain flag has been up 2 min with the car on
+    slicks; BOX for SLICKS once it has been down 5 min, the car is on inters/wets and slicks have become faster"."""
+    d = state.drivers[number]
+    w = view.race("weather")
+    run, since = w.get("rain_minutes"), w.get("minutes_since_rain")
+    on_slick = d.compound in ("SOFT", "MEDIUM", "HARD")
+    if on_slick and w.get("rain_now") and isinstance(run, (int, float)) and run >= NAIVE["rain_min"]:
+        return "BOX", "INTERMEDIATE", [Reason("rain_flag", f"BOX for INTERS: rain flag up for {run:.0f} min and no wet-tyre model", round(float(run), 1))]
+    if (d.compound in ("INTERMEDIATE", "WET") and not w.get("rain_now") and isinstance(since, (int, float)) and since >= NAIVE["dry_min"]
+            and w.get("crossover") == "to_slicks"):
+        left = max((state.total_laps or 60) - d.laps, 1)
+        d_s = w.get("inters_vs_slicks_s")
+        txt = f"crossover reached: slicks {abs(d_s):.1f} s/lap faster; " if isinstance(d_s, (int, float)) else ""
+        return "BOX", slick_compound(pri, left), [Reason("rain_flag", f"BOX for SLICKS: {txt}rain flag down for {since:.0f} min", round(float(since), 1))]
+    return "STAY_OUT", None, [Reason("rain_flag", "no tyre-class switch signalled by the rain flag")]
