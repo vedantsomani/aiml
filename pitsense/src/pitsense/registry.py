@@ -56,6 +56,7 @@ LABELERS: list[str] = [
 # CLI extensions: f(subparsers) -> None, adding `pitsense <command>` parsers (cli.py).
 COMMANDS: list[str] = [
     "pitsense.bench.rules:add_commands",
+    "pitsense.bench.mechanics:add_commands",
     "pitsense.modelstore:add_commands",
     "pitsense.pitwall.runtime:add_commands",
     "pitsense.bench.weather:add_commands",

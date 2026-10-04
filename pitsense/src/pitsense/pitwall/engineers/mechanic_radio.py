@@ -66,7 +66,7 @@ _PATTERNS: list[tuple[str, float, re.Pattern]] = [
         # ---- damage / structural
         ("damage", 0.7, r"\b(?:significant|heavy|big|some|bit of|a lot of|lot of|serious|front|rear|floor|wing|car|bodywork) damage\b"),
         ("damage", 0.7, r"\b(?:have|got|has|with|took|see|see the|taking|suffered) (?:a )?damage\b"),
-        ("damage", 0.7, r"\b(?:front|rear|floor|wing|suspension|car|wheel|nose|diffuser|brake duct|sidepod|engine cover)s? (?:is |are |has |have |got |looks? |was |'s )?(?:completely |totally |really |very |quite )?(?:broken|damaged|gone|bent|cracked|hanging|loose|missing|off)\b"),
+        ("damage", 0.7, r"\b(?:front wing|rear wing|floor|wing|suspension|wheel|nose|diffuser|brake duct|sidepod|engine cover)s? (?:is |are |has |have |got |looks? |was |'s )?(?:completely |totally |really |very |quite )?(?:broken|damaged|gone|bent|cracked|hanging|loose|missing)\b"),
         ("damage", 0.7, r"\b(?:car|it) (?:is|'s|feels|has been) (?:completely |totally |really |very )?broken\b"),
         ("damage", 0.7, r"\bsomething (?:fell|broke|came|has come|is hanging|is loose|has fallen|just fell|snapped)\b"),
         ("damage", 0.7, r"\bsuspension is broken\b"),
@@ -76,23 +76,26 @@ _PATTERNS: list[tuple[str, float, re.Pattern]] = [
         ("puncture", 0.9, r"\b(?:puncture|punctured|deflat\w+|blown tyre|blown tire|blow out|blowout)\b"),
         ("puncture", 0.8, r"\b(?:slow|flat) (?:puncture|tyre|tire)\b"),
         ("puncture", 0.7, r"\b(?:losing|lost) (?:air|pressure|tyre pressure)\b"),
-        ("puncture", 0.6, r"\b(?:tyre|tire)s? (?:is|are) (?:flat|gone|deflating|losing)\b"),
+        ("puncture", 0.6, r"\b(?:tyre|tire)s? (?:is|are) (?:flat|deflating|losing)\b"),
         # ---- vibration / noise
         ("vibration", 0.7, r"\b(?:big|huge|massive|heavy|strong|serious|lots of|some|bad|severe)? ?vibrations?\b(?! from the pit)"),
         ("vibration", 0.7, r"\b(?:shaking|vibrating|wobbl\w+|shudder\w*)\b"),
         ("vibration", 0.5, r"\b(?:strange|weird|funny|odd|metallic|rattling|grinding|banging|bad) (?:noise|sound)\b"),
         ("vibration", 0.5, r"\b(?:noise|sound) (?:from|in) (?:the |my )?(?:rear|front|back|engine|gearbox|car)\b"),
         # ---- leaks, smoke, fire, heat
-        ("leak_fire", 0.95, r"\b(?:fire|on fire|smoke|smoking|flames?)\b(?! in the air)"),
+        ("leak_fire", 0.95, r"\b(?:smoke|smoking|flames?)\b"),
+        ("leak_fire", 0.9, r"\b(?:engine|gearbox|brakes?|rear|cockpit|pu) (?:is |are |'s )?(?:on )?fire\b|\bfire (?:in|from) the (?:engine|car|cockpit|rear|back)\b"),
+        ("leak_fire", 0.25, r"\bfire\b(?! in the air)"),
         ("leak_fire", 0.9, r"\boil leak\b|\bleak(?:ing)? (?:oil|water|fluid|fuel)\b"),
-        ("leak_fire", 0.6, r"\b(?:overheat\w*|over-heat\w*|water temp\w* (?:high|rising)|cooling (?:problem|issue))\b"),
+        ("leak_fire", 0.6, r"\b(?:engine|brakes?|gearbox|pu|battery|water|oil|cooling)\b.{0,20}\b(?:overheat\w*|over-heat\w*)|\b(?:overheat\w*|over-heat\w*)\b.{0,20}\b(?:engine|brakes?|gearbox|pu|battery|water|oil)\b|\bwater temp\w* (?:high|rising)|\bcooling (?:problem|issue)"),
+        ("leak_fire", 0.3, r"\boverheat\w*|over-heat\w*"),
         ("leak_fire", 0.6, r"\bsmell (?:something|burning|smoke)\b"),
         # ---- electrical / hydraulics / steering
         ("electrical", 0.7, r"\b(?:losing|lost|lose|no|failed) (?:the )?(?:power steering|steering|hydraulics?|dash|display|radio|electrics?)\b"),
         ("electrical", 0.6, r"\b(?:battery|ers|mgu-?k|harvest\w*|deployment|hybrid)\b.{0,25}\b(?:problem|issue|failure|failing|dead|not working|lost|gone|empty|joke|broken)\b"),
         ("electrical", 0.6, r"\b(?:steering|hydraulics?|electrics?|dash(?:board)?|differential|diff) (?:problem|issue|failure|failing|fault|not working|lost|gone)\b"),
         # ---- retirement language
-        ("retire", 0.95, r"\b(?:retire the car|stop the car|park the car|park it|box this lap.{0,25}retire|this is to retire|we(?:'ll| will| are| 're) retir\w+|i'm out|i am out|pull over|switch (?:the )?(?:car|engine) off|turn the car off|shut (?:it|the car|the engine) down)\b"),
+        ("retire", 0.95, r"\b(?:retire the car|stop the car|park the car|park it|box this lap.{0,25}retire|this is to retire|we(?:'ll| will| are| 're) retir\w+|i'm out|i am out|pull over|switch (?:the )?(?:car|engine) off|shut (?:it|the car|the engine) down)\b"),
         ("retire", 0.8, r"\b(?:retire|retirement)\b.{0,12}\bcar\b|\bcar\b.{0,12}\bretire\w*"),
         # ---- generic
         ("generic", 0.6, r"\bsomething(?:'s| is| has)? (?:wrong|broken|off|not right|not good|failing|happening)\b"),
@@ -148,7 +151,7 @@ def classify(text: str | None) -> tuple[str, float, str]:
                 span = low[max(0, m.start() - 12):m.end() + 14]
                 if _DENIED.search(span) and not re.search(r"\b(?:lost|losing|can't|cannot|no (?:power|brakes?|drive|gears?))\b", m.group(0)):
                     continue
-                s = w * (0.5 if question else 1.0) * (0.5 if fixed else 1.0)
+                s = w * (0.4 if question else 1.0) * (0.5 if fixed else 1.0)
                 if s > best.get(issue, (0.0, ""))[0]:
                     best[issue] = (s, sent.strip())
     if not best:
