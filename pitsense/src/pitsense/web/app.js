@@ -31,7 +31,58 @@ function tyre(c, age) {
 function action(c, big) {
   return '<span class="' + (big ? "big-act " : "") + "act " + esc(c) + '">' + esc(c.replace(/_/g, " ")) + "</span>";
 }
-const focusSet = () => new Set((snap.focus || []).concat([...pinned]));
+// Each viewer picks its own team (localStorage); "" = whatever the server was started with. Nothing is sent to the server.
+let myTeam = "";
+try { myTeam = localStorage.getItem("pitsense.team") || ""; } catch (e) { /* no storage */ }
+const baseFocus = () => {
+  const t = snap && snap.extra && snap.extra.teams;
+  return myTeam === "-" ? [] : myTeam && t && t[myTeam] ? t[myTeam] : (snap && snap.focus) || [];
+};
+const focusName = () => (myTeam && myTeam !== "-" ? myTeam : myTeam === "-" ? "" : (snap && snap.extra && snap.extra.team) || "");
+const focusSet = () => new Set(baseFocus().concat([...pinned]));
+function syncTeamSel(s) {
+  const sel = $("teamsel"), teams = Object.keys((s.extra || {}).teams || {});
+  const sig = teams.join("|") + "#" + (s.extra.team || "") + "#" + myTeam;
+  if (sel.dataset.sig === sig) return;
+  sel.dataset.sig = sig;
+  sel.innerHTML = '<option value="">' + esc(s.extra.team ? "team: " + s.extra.team + " (server)" : "team: server default") + '</option><option value="-">no team (pins only)</option>' +
+    teams.map((t) => '<option value="' + esc(t) + '">' + esc(t) + "</option>").join("");
+  sel.value = myTeam;
+  if (sel.value !== myTeam) { myTeam = ""; sel.value = ""; }
+}
+$("teamsel").addEventListener("change", (e) => {
+  myTeam = e.target.value;
+  try { localStorage.setItem("pitsense.team", myTeam); } catch (e2) { /* no storage */ }
+  convoSig = ""; seenMsgs.clear();
+  if (snap) { renderTower(snap); renderFocus(snap); renderCallbar(snap); applyFocus(); renderConvo(snap); renderQuali(snap); }
+});
+
+// ---- phone tabs (CSS shows one section at a time under 700 px; on larger screens everything is visible)
+let tab = "tower";
+try { tab = localStorage.getItem("pitsense.tab") || "tower"; } catch (e) { /* no storage */ }
+function setTab(t) {
+  if (!document.querySelector('#tabs [data-tab="' + t + '"]')) t = "tower";
+  tab = t;
+  document.body.className = "tab-" + t;
+  for (const b of document.querySelectorAll("#tabs button")) b.classList.toggle("on", b.dataset.tab === t);
+  try { localStorage.setItem("pitsense.tab", t); } catch (e) { /* no storage */ }
+  if (t === "map" && typeof scaleMap === "function") setTimeout(scaleMap, 0);
+}
+$("tabs").addEventListener("click", (e) => { const b = e.target.closest("button[data-tab]"); if (b) setTab(b.dataset.tab); });
+setTab(tab);
+
+// sticky call banner: the current call for each focus car, visible on every tab
+function renderCallbar(s) {
+  const mine = [...focusSet()], row = {}, calls = {};
+  for (const r of s.tower || []) row[r.car] = r;
+  for (const c of s.calls || []) calls[c.car] = c;
+  const cars = mine.filter((n) => row[n]);
+  $("callbar").hidden = !cars.length;
+  $("callbar").innerHTML = cars.map((n) => {
+    const r = row[n], c = calls[n];
+    return '<span class="cb"><b>' + esc(r.tla || n) + "</b> P" + (r.position == null ? "-" : r.position) + " " + action(c ? c.action : "NO_CALL") + "</span>";
+  }).join("");
+}
 
 function renderHeader(s) {
   const x = s.extra;
@@ -265,7 +316,7 @@ function syncAskCars(s) {
   if (cars.includes(keep)) sel.value = keep;
   sel.hidden = cars.length < 2;
 }
-const askCar = () => $("askcar").value || (snap && snap.focus && snap.focus[0]) || [...pinned][0] || "";
+const askCar = () => $("askcar").value || baseFocus()[0] || [...pinned][0] || "";
 function askStat(t) { $("askstat").textContent = t || ""; }
 function handleAsk(r) {
   if (!r || !r.ok) { askStat((r && r.error) || "no answer"); return; }
@@ -322,7 +373,8 @@ function micStop() {
   if (rec && rec.state === "recording") rec.stop();
 }
 const mic = $("micbtn");
-mic.addEventListener("pointerdown", (e) => { e.preventDefault(); micStart(); });
+mic.addEventListener("contextmenu", (e) => e.preventDefault());  // no long-press menu on touch
+mic.addEventListener("pointerdown", (e) => { e.preventDefault(); try { mic.setPointerCapture(e.pointerId); } catch (e2) { /* ok */ } micStart(); });
 for (const ev of ["pointerup", "pointerleave", "pointercancel"]) mic.addEventListener(ev, micStop);
 mic.addEventListener("keydown", (e) => { if ((e.key === " " || e.key === "Enter") && !e.repeat) { e.preventDefault(); micStart(); } });
 mic.addEventListener("keyup", (e) => { if (e.key === " " || e.key === "Enter") micStop(); });
@@ -514,7 +566,7 @@ window.addEventListener("resize", scaleMap);
 
 function renderFocus(s) {
   const mine = [...focusSet()];
-  $("focusnote").textContent = (s.focus || []).length ? (s.extra.team || "") : "no team set: pin cars from the tower";
+  $("focusnote").textContent = baseFocus().length ? focusName() : "no team set: pick one above or pin cars from the tower";
   if (!mine.length) { $("focus").innerHTML = '<div class="empty">Start with --team, or click a car in the tower.</div>'; return; }
   const row = {}, calls = {};
   for (const r of s.tower) row[r.car] = r;
@@ -550,7 +602,7 @@ function render(s) {
   if (!s || s.waiting) return;
   s.extra = s.extra || {};
   snap = s;
-  renderHeader(s); renderQuali(s); renderTower(s); renderFocus(s); renderAlerts(s);
+  syncTeamSel(s); renderHeader(s); renderQuali(s); renderTower(s); renderFocus(s); renderCallbar(s); renderAlerts(s);
   if (s.extra.team_radio) radioList = s.extra.team_radio;
   if (s.extra.positions) onPositions(s.extra.positions);
   renderMap(s); renderConvo(s);
@@ -562,7 +614,7 @@ document.querySelector("#tower tbody").addEventListener("click", (e) => {
   const n = tr.dataset.car;
   if (pinned.has(n)) pinned.delete(n); else pinned.add(n);
   try { localStorage.setItem("pinned", JSON.stringify([...pinned])); } catch (e2) { /* no storage */ }
-  if (snap) { renderTower(snap); renderFocus(snap); applyFocus(); renderConvo(snap); }
+  if (snap) { renderTower(snap); renderFocus(snap); renderCallbar(snap); applyFocus(); renderConvo(snap); }
 });
 
 function conn(ok, text) { const c = $("conn"); c.textContent = text; c.className = "chip " + (ok ? "on" : "off"); }
@@ -582,3 +634,7 @@ if (window.EventSource) {
   });
   es.addEventListener("status", (e) => { if (JSON.parse(e.data).status === "finished") conn(true, "feed ended"); });
 } else poll();
+
+// the sticky call banner sits right under the (variable height) sticky header
+function fitBars() { document.documentElement.style.setProperty("--hh", document.querySelector("header").offsetHeight + "px"); }
+window.addEventListener("resize", fitBars); fitBars();

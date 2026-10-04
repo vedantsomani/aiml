@@ -14,7 +14,7 @@ header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;padding:10px
 .chip.on{color:var(--green);border-color:var(--green)}.chip.off{color:var(--red);border-color:var(--red)}
 .warn{background:#3a2a00;color:var(--yellow);padding:6px 16px;border-bottom:1px solid #5a4300;font-weight:600}
 main{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(380px,1fr);gap:12px;padding:10px 12px;align-items:start}
-@media(max-width:1100px){main{grid-template-columns:1fr}}
+
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px 12px;margin-bottom:12px}
 h2{margin:0 0 8px;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
 h2 small{text-transform:none;letter-spacing:0;margin-left:8px;color:#5d6875}
@@ -96,3 +96,58 @@ td.p{font-weight:700;width:34px}
 #micbtn{user-select:none;touch-action:none}
 #micbtn.rec{background:#7a1d1d;border-color:var(--red);box-shadow:0 0 0 2px #ff3b3055}
 .askstat{min-height:16px;margin-top:4px;font-size:11px;color:var(--dim)}
+
+/* ---- viewers: team selector, call banner, tabs */
+.teamsel{font:inherit;font-size:12px;padding:3px 6px;max-width:190px;background:#1b2633;color:var(--fg);border:1px solid #3a4d63;border-radius:6px}
+.callbar{display:flex;gap:8px;flex-wrap:wrap;padding:6px 12px;background:#0c1a19;border-bottom:1px solid #145b52;position:sticky;top:var(--hh,0);z-index:4}
+.callbar[hidden]{display:none}
+.callbar .cb{display:inline-flex;align-items:center;gap:6px;font-weight:600}
+.tabs{display:none}
+img,svg,table{max-width:100%}
+main>*,aside>*{min-width:0}
+
+/* tablet: two columns (tower | map, radio, team, alerts) */
+@media(min-width:700px) and (max-width:1100px){
+  main{grid-template-columns:minmax(0,1.1fr) minmax(0,1fr)}
+  td.p{width:28px}th.x,td.x{display:none}
+  .tower th:nth-child(4),.tower td:nth-child(4),.tower th:nth-child(6),.tower td:nth-child(6),.tower th:nth-child(9),.tower td:nth-child(9){display:none}
+}
+/* touch screens: big targets */
+@media(pointer:coarse){
+  tr.car td{padding-top:8px;padding-bottom:8px}
+  .askform select,.askform button,.askform input,.teamsel,.msg .play,#radiobtn{min-height:44px}
+  #micbtn{min-width:64px;font-size:24px}
+  #micbtn,.tabs button{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+}
+/* phone: one section at a time, switched by the tab bar */
+@media(max-width:699px){
+  html,body{overflow-x:hidden}
+  header{gap:6px 10px;padding:8px 10px}
+  header #clock,header #wx,header #loss,header #title,header #mode{display:none}
+  .brand{font-size:15px}.hd.big{font-size:18px}
+  .teamsel{flex:1;min-width:0;max-width:none;min-height:40px}
+  main{display:block;padding:8px 8px 76px}
+  aside{display:block}
+  .panel[data-tab]{display:none}
+  body.tab-tower .panel[data-tab="tower"],body.tab-map .panel[data-tab="map"],body.tab-radio .panel[data-tab="radio"],
+  body.tab-team .panel[data-tab="team"],body.tab-alerts .panel[data-tab="alerts"]{display:block}
+  body.tab-tower #qpanel[hidden]{display:none}
+  .tower{overflow-x:hidden}
+  th.x,td.x{display:none}
+  .tower th:nth-child(4),.tower td:nth-child(4),.tower th:nth-child(6),.tower td:nth-child(6),
+  .tower th:nth-child(7),.tower td:nth-child(7),.tower th:nth-child(9),.tower td:nth-child(9){display:none}
+  th,td{padding:8px 3px;font-size:13px}
+  .cn{display:none}
+  .act{font-size:11px;padding:1px 5px}
+  #map{height:min(62vh,440px)}
+  .convo{max-height:48vh}
+  .askform{flex-wrap:wrap;position:sticky;bottom:60px;background:var(--panel);padding:6px 0}
+  .askform input{flex:1 1 100%;order:1;min-height:44px;font-size:16px}
+  .askform select{order:0;flex:1 1 100%}
+  .askform #askbtn{order:2;flex:1;min-height:44px}
+  .askform #micbtn{order:3;flex:2;min-height:56px;font-size:26px}
+  #qtab{display:block;overflow-x:auto}
+  .tabs{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:6;background:#0b0e12;border-top:2px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
+  .tabs button{flex:1;min-height:56px;font:inherit;font-size:13px;font-weight:600;background:none;color:var(--dim);border:0;border-top:3px solid transparent;cursor:pointer}
+  .tabs button.on{color:var(--accent);border-top-color:var(--accent);background:#0f1318}
+}

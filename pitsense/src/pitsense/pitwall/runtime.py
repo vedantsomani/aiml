@@ -561,6 +561,15 @@ class PitWallRuntime:
             self._radio_sig, msg["team_radio"] = sig, radio
         self._notify({"event": "pos", "data": _json_bytes(msg)})
 
+    @staticmethod
+    def _teams(state: RaceState) -> dict:
+        """team name -> car numbers: lets each browser pick its own focus team."""
+        out: dict[str, list[str]] = {}
+        for n, d in state.drivers.items():
+            if d.team:
+                out.setdefault(d.team, []).append(n)
+        return {t: sorted(c, key=lambda x: int(x) if x.isdigit() else 999) for t, c in sorted(out.items())}
+
     def _extra(self, state: RaceState) -> dict:
         rc = [{"t": round(m.t, 1), "message": m.message, "category": m.category}
               for m in state.rc if "BLUE FLAG" not in m.message][-6:]
@@ -570,6 +579,7 @@ class PitWallRuntime:
             "model": self.model_info,
             "weather": dict(state.weather),
             "colours": {n: d.team_colour for n, d in state.drivers.items() if d.team_colour},
+            "teams": self._teams(state),
             "rc": rc,
             "track_status_since": round(state.track_status_since, 1),
             "team": self.team.team, "wall_time": time.time(),
@@ -669,6 +679,7 @@ class PitWallRuntime:
             "last_event_age_s": None if self.last_event_wall is None else round(now - self.last_event_wall, 1),
             "uptime_s": round(now - self.started_wall, 1),
             "inferred_order": self.inferred_order, "model": self.model_info,
+            "viewers": len(self.listeners),
             "observe_errors": self.observe_errors, "snapshot_errors": self.snapshot_errors,
             "snapshot_ms_p50": round(ms[len(ms) // 2], 2) if ms else None,
             "snapshot_ms_max": round(ms[-1], 2) if ms else None,
@@ -936,6 +947,17 @@ def load_with_feeds(session_dir: Path) -> _events.EventLog:
     return _events.load_archive_session(session_dir, tuple(f.stem for f in files if f.stem != "CarData.z"))
 
 
+def _lan_ip() -> str:
+    import socket
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sk:
+            sk.connect(("10.255.255.255", 1))  # no packet is sent; picks the outgoing interface
+            return sk.getsockname()[0]
+    except OSError:
+        return "<this-computer-ip>"
+
+
 def cmd_pitwall(a) -> None:
     from ..config import data_dir
     from ..web.server import serve
@@ -944,9 +966,13 @@ def cmd_pitwall(a) -> None:
     log_dir = Path(a.log_dir) if a.log_dir else data_dir() / "pitwall"
     rt = PitWallRuntime(src, team=_team_config(a.team), log_dir=log_dir, models=not a.no_models)
     rt.start()
-    server = serve(rt, host=a.host, port=a.port)
-    url = f"http://{server.server_address[0]}:{server.server_address[1]}/"
+    server = serve(rt, host=a.host, port=a.port, token=a.token)
+    port = server.server_address[1]
+    q = f"?token={a.token}" if a.token else ""
+    url = f"http://{'127.0.0.1' if a.host in ('0.0.0.0', '') else server.server_address[0]}:{port}/{q}"
     print(f"Pit wall on {url}   ({src.mode}: {src.title})   call log: {rt.log_path}")
+    if a.host in ("0.0.0.0", ""):
+        print(f"On the same Wi-Fi open  http://{_lan_ip()}:{port}/{q}" + ("" if a.token else "   (no --token: anyone on the network can watch and ask)"))
     if not a.no_browser:
         import webbrowser
 
@@ -994,7 +1020,8 @@ def add_commands(sub) -> None:
     s.add_argument("--minutes", type=float, default=180, help="with --live: stop recording after this long")
     s.add_argument("--no-auth", action="store_true", help="with --live: skip F1 TV sign-in (no positions)")
     s.add_argument("--team", help="your team, e.g. 'ferrari', or car numbers '16,44'")
-    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--host", default="127.0.0.1", help="0.0.0.0 lets phones on the same Wi-Fi connect (use --token)")
+    s.add_argument("--token", help="require ?token=<this> on every request (first page load sets a cookie)")
     s.add_argument("--port", type=int, default=8765, help="0 = any free port")
     s.add_argument("--no-browser", action="store_true")
     s.add_argument("--no-models", action="store_true", help="don't load a trained model bundle")
