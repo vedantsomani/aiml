@@ -35,6 +35,8 @@ pitsense train --before 2026-07-26T13:00Z   # or before a UTC time
 | Key | Row | Model | Meaning |
 |---|---|---|---|
 | `pit_prob_1`, `pit_prob_3` | `lap_end` at the car's latest completed lap | `gbm_hazard` | probability of a stop within 1 / 3 laps (0-1) |
+| `p_stop_le_1`, `p_stop_le_2`, `p_stop_le_3`, `p_stop_le_5`, `p_stop_le_8` | `lap_end` at the car's latest completed lap | `survival_hz` | probability the next stop (in-lap) is within k laps (0-1) |
+| `laps_to_stop_exp`, `laps_to_stop_med` | same row | `survival_hz` | expected and median laps to the next stop; capped at 16 (= "more than 15 laps") |
 | `rejoin_pred` | `pit_entry` for a stop on the next lap | `pitstop_gbm` | position the car would rejoin in |
 
 Rows come from `bench.features.base_row` (shared with `FeatureBuilder`) plus the values of every
@@ -71,6 +73,34 @@ choice follows the protocol and is a candidate for revisiting. Both beat `gap_mi
 **Other bundle tasks** (stored, not yet served live), 2026 MAE or log loss: `next_lap_gbm` 0.670 s
 (vs last clean lap 1.498), `lap5_gbm` 0.872 s, `cliff_gbm` log loss 0.1268 (base rate 0.1489),
 `fresh_gbm` 0.823 s, `pitstop_loss` 3.38 s.
+
+**laps_to_stop (`survival_hz`).** How many laps until each car's next stop, as a distribution
+(`bench/laps_to_stop.py`). Label `y_laps_to_stop` = in-lap of the next non-red-flag stop minus the lap
+(NaN if none). A car that takes the flag without stopping again is "never stops" (known); only a
+retirement is censored (`y_stop_retired`, Kaplan-Meier IPCW in the Brier score). The model is a
+discrete-time survival model over horizons 1..15: one boosted hazard model per horizon, each fit on the
+cars still at risk at that horizon (label: stops exactly then), CDF = 1 - prod(1 - hazard), zero beyond the laps
+left in the race. Inputs: `feature_columns()` (base, tyre and rules features; the rivals and pit-stop extras
+were tried and made it over-predict on 2025), training races weighted by 0.5 ** (age / 3 years). A stacked
+person-period model (`SurvivalGBM`, horizon as a feature) is kept in the module: same IBS on 2025 but it
+over-predicted by 30 % at k = 1, so it is not used. Baselines: `geo_gbm_hazard` (the P(stop within 3)
+model extended with a constant hazard), `geo_gbm_hazard_1`, `rivals_hazard` (the rivals' `pit_prob_1/3/5`
+as a cumulative hazard) and `base_hazard`. Tuned on 2025, 2026 scored once (`bench run --tasks laps_to_stop`):
+
+| 2026 (n 16,177, 9,715 stops) | c-index | IBS | brier@1 | brier@3 | brier@5 | window +-2 (all / <=15 laps) | pred/obs @1, 3, 5 |
+|---|---|---|---|---|---|---|---|
+| survival_hz | **0.764** | **0.1230** | 0.0275 | 0.0722 | 0.1066 | **0.278 / 0.326** | 1.03, 1.03, 1.01 |
+| geo_gbm_hazard | 0.752 | 0.1296 | 0.0281 | 0.0728 | 0.1066 | 0.238 / 0.233 | 1.03, 0.94, 0.87 |
+| geo_gbm_hazard_1 | 0.741 | 0.1354 | 0.0277 | 0.0726 | 0.1076 | 0.231 / 0.217 | 0.97, 0.89, 0.82 |
+| rivals_hazard | 0.701 | 0.1452 | 0.0291 | 0.0793 | 0.1193 | 0.193 / 0.176 | 0.83, 0.81, 0.81 |
+| base_hazard | 0.601 | 0.1587 | 0.0298 | 0.0844 | 0.1305 | 0.164 / 0.105 | 0.94, 0.93, 0.93 |
+
+(2025 for reference: survival_hz c-index 0.787, IBS 0.1141, window 0.267 / 0.343; geo_gbm_hazard 0.775 / 0.1193 /
+0.228 / 0.238.) Calibration is good in every bin at k = 1 and 3 (see the report; k = 5 under-predicts 0.02-0.1 by
+about 2 points). Window accuracy is the share of real stops whose median forecast is within 2 laps: about a quarter
+to a third; stops are only partly predictable from the timing feed. "pred/obs" is mean predicted over observed.
+`laps_to_stop_med` 16 means more than 15 laps. Served live as the `p_stop_le_*` keys above, from the same row as the
+benchmark (parity test in `tests/test_laps_to_stop.py`).
 
 ## Failure modes
 
