@@ -79,3 +79,11 @@ td.p{font-weight:700;width:34px}
 .msg.alert-msg{align-self:flex-end}.msg.alert-msg .bub{background:#1c1a0c;border-color:#4a3f10;font-size:13px}
 .msg.alert-msg.critical .bub{background:#2a0e0e;border-color:#6b1d1d}
 .msg.playing .bub{box-shadow:0 0 0 2px var(--accent)}
+
+#qtab{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px}
+#qtab th{text-align:left;color:var(--dim);font-weight:500}
+#qtab td,#qtab th{padding:2px 6px}
+#qtab tr.zone td{background:#2a1214}
+#qtab tr.mine td{outline:1px solid var(--accent)}
+#qtab td.critical{color:#ff6b6b;font-weight:700}
+#qsum{font-size:12px;color:var(--dim)}

@@ -9,7 +9,7 @@ Tasks
                slowest time set while fewer cars than the cut have one) and ``now+mean`` (plus the
                mean 2025 improvement).
     knockout   log loss of P(car ends the part beyond the cut line). Baselines: ``prior`` (share
-               of cars knocked out) and ``rank`` (0.9 / 0.1 by being in the drop zone now).
+               of cars knocked out) and ``rank`` (0.8 / 0.2 by being in the drop zone now, the 2025 best).
 
 Protocol: tune on 2025 (leave-one-session-out), fit on all of 2025, score 2026 once.
     pitsense quali-bench --out reports

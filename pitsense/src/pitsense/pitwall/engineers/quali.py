@@ -50,11 +50,11 @@ class QualiEngineer(Engineer):
         if pic is not None:
             tr = self.tracker
             tr.sample_cut(pic.part, state.t, pic.cut_time)
-            pred = Q.predict_cut(pic, self.sprint)
+            pred = Q.predict_cut(pic, self.sprint) if pic.cut_pos is not None else None
             out_s = Q.lap_estimates(state, pic) if pic.cut_pos is not None or pic.cars else None
             on_track = sum(1 for c in pic.cars.values() if not c.in_pit)
             waiting = sum(1 for c in pic.cars.values() if c.in_pit and (c.best is None or c.in_zone))
-            traffic = self._traffic(state, on_track)
+            traffic = self._traffic(state, on_track, {n for n, c in pic.cars.items() if not c.in_pit})
             guide = {n: Q.guidance(state, pic, c, pred, on_track, out_s, max(waiting - 1, 0)) for n, c in pic.cars.items()}
             for n, c in pic.cars.items():
                 tr.mark(("elig", pic.part, n), state.t)
@@ -62,18 +62,15 @@ class QualiEngineer(Engineer):
         self._cache = (key, out)
         return out
 
-    def _traffic(self, state, on_track: int) -> dict:
-        """Cars that would be in front of a car leaving the pits now: from car positions when there
-        is a circuit outline (cars on track in the first 40 % of the lap after the line)."""
-        out = {"n_on_track": on_track, "traffic_ahead": None}
+    def _traffic(self, state, on_track: int, out: set) -> dict:
+        """Cars on track by the timing feed; with car positions and a circuit outline, also how many are in
+        the first 40 % of the lap after the line (the cars in front of one leaving the pits now)."""
+        res = {"n_on_track": on_track, "traffic_ahead": None}
         try:
             pos = state.feeds.telemetry.latest_position()
         except Exception:
-            return out
-        if not pos:
-            return out
-        pts = [p for p in pos.values() if p.get("on_track") and p["x"] == p["x"] and p["y"] == p["y"]]
-        out["n_on_track"] = len(pts)
+            return res
+        pts = [p for n, p in pos.items() if n in out and p.get("on_track") and p["x"] == p["x"] and p["y"] == p["y"]]
         if self.outline and pts:
             xs, ys = self.outline["x"], self.outline["y"]
             n = len(xs)
@@ -82,8 +79,8 @@ class QualiEngineer(Engineer):
                 i = min(range(n), key=lambda k: (xs[k] - p["x"]) ** 2 + (ys[k] - p["y"]) ** 2)
                 if i / n < 0.4:
                     cnt += 1
-            out["traffic_ahead"] = cnt
-        return out
+            res["traffic_ahead"] = cnt
+        return res
 
     # ------------------------------------------------------------------ values
     def race(self, state, view):

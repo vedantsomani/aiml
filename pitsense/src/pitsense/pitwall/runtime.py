@@ -240,6 +240,7 @@ class PitWallRuntime:
             self.publish_every_s = MAX_SPEED_TICK_S if speed <= 0 else PUBLISH_EVERY_S * max(speed, 1.0)
         self.state = RaceState(source.meta)
         self.wall = None
+        self._wall_quali = False
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.lock = threading.Lock()
@@ -322,9 +323,23 @@ class PitWallRuntime:
             self.model_info = {"loaded": True, "cutoff_utc": str(models.cutoff_utc),
                                "train_end_utc": str(models.train_end_utc), "races": len(models.trained_on)}
         meta = dict(src.meta)
+        engineers = self.engineers
+        self._wall_quali = self._is_quali()
+        if self._wall_quali:  # qualifying: the race engineers have nothing to say
+            from .engineers.quali import QualiEngineer
+
+            meta.setdefault("session_name", self.session_info.get("Name") or "Qualifying")
+            engineers = engineers if engineers is not None else [QualiEngineer]
         ctx = Context.for_race(prior, meta, history=history if start is not None else None,
                                race_start_utc=start, team=self.team, models=models)
-        self.wall = PitWall(ctx, engineers=self.engineers)
+        self.wall = PitWall(ctx, engineers=engineers)
+
+    def _is_quali(self) -> bool:
+        """Qualifying or Sprint Qualifying: from the archive ref, else the SessionInfo message."""
+        from ..quali import QUALI_NAMES
+
+        name = self.source.meta.get("session_name") or self.session_info.get("Name")
+        return name in QUALI_NAMES
 
     # --------------------------------------------------------------- loop
     def start(self) -> "PitWallRuntime":
@@ -374,6 +389,8 @@ class PitWallRuntime:
         self.last_event_wall = time.time()
         if e.topic == "SessionInfo" and isinstance(e.data, dict):
             _merge(self.session_info, e.data)
+            if self.wall is not None and not self._wall_quali and self._is_quali():
+                self._build_wall()  # a recording whose first message names the session
             self._feed_radio(e)
         if e.topic in FEED_TOPICS:  # feeds never change the timing state: no engineers, no snapshot
             if e.topic == "TeamRadio":
@@ -458,6 +475,8 @@ class PitWallRuntime:
             return
         if t:
             self.track = {k: t.get(k) for k in ("x", "y", "start", "pit")} | {"key": f"{key}:{t.get('end_utc')}"}
+            if self._wall_quali and self.wall is not None:  # the qualifying engineer judges traffic on it
+                self.wall.engineer("quali").outline = self.track
 
     def _live_track(self) -> None:
         """No stored outline: build one from the cars' published positions once 2 laps are done (as-of)."""
@@ -759,6 +778,11 @@ def _team_config(text: str | None) -> TeamConfig:
     return TeamConfig(team=text.strip())
 
 
+SESSION_NAMES = {None: None, "race": "Race", "sprint": "Sprint", "qualifying": "Qualifying",
+                 "sprint-qualifying": "Sprint Qualifying", "practice1": "Practice 1",
+                 "practice2": "Practice 2", "practice3": "Practice 3"}
+
+
 def build_source(a) -> Source:
     if a.live:
         out = Path(a.out) if a.out else Path(os.environ.get("PITSENSE_DATA", "data")) / "live" / (
@@ -773,7 +797,7 @@ def build_source(a) -> Source:
     if not a.race:
         raise SystemExit("give --race (archive replay), --file (a recording) or --live")
     from .. import archive
-    ref = archive.find_session(a.year, a.race, "Sprint" if a.sprint else "Race")
+    ref = archive.find_session(a.year, a.race, SESSION_NAMES.get(a.session) or ("Sprint" if a.sprint else "Race"))
     if not (ref.local_dir / "TimingData.jsonStream").exists():
         archive.download_session(ref)
     return ReplaySource(load_with_feeds(ref.local_dir), a.speed, ref=ref)
@@ -833,6 +857,8 @@ def add_commands(sub) -> None:
     s.add_argument("--year", type=int, default=2026)
     s.add_argument("--race", help="archive replay, e.g. 'hungary'")
     s.add_argument("--sprint", action="store_true")
+    s.add_argument("--session", choices=[k for k in SESSION_NAMES if k],
+                   help="session of the meeting (default race): qualifying and sprint-qualifying get the qualifying panel")
     s.add_argument("--speed", type=float, default=1.0, help="replay speed (x real time; 0 = as fast as possible)")
     s.add_argument("--file", help="a recording from `pitsense record`")
     s.add_argument("--follow", action="store_true", help="with --file: follow it as it grows instead of replaying")

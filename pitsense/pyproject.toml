@@ -32,7 +32,7 @@ pitsense = "pitsense.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-pitsense = ["web/*.html", "web/*.js", "web/*.css"]
+pitsense = ["web/*.html", "web/*.js", "web/*.css", "quali_model.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

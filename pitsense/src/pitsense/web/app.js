@@ -60,6 +60,35 @@ function renderHeader(s) {
   $("warn").textContent = msgs.join("  ");
 }
 
+// ---- qualifying panel: shown when the quali engineer is on the wall (race values quali__*)
+const SEND = {SEND_NOW: ["SEND NOW", "critical"], TOO_LATE: ["too late", "dim"], WAIT: ["wait", ""], ON_TRACK: ["on track", "dim"], SAFE: ["", ""]};
+function renderQuali(s) {
+  const r = s.race || {}, on = r.quali__part != null;
+  $("qpanel").hidden = !on;
+  if (!on) return;
+  const left = r.quali__time_left_s;
+  const clk = left == null ? "--" : Math.floor(left / 60) + ":" + String(Math.floor(left % 60)).padStart(2, "0");
+  $("lap").textContent = "Q" + r.quali__part + (r.quali__sprint ? " (sprint)" : "") + "  " + clk;
+  $("qnote").textContent = r.quali__cut_pos ? "cut after P" + r.quali__cut_pos : "final part";
+  const bits = [];
+  if (r.quali__cut_time_s != null) bits.push("cut " + fmtTime(r.quali__cut_time_s));
+  if (r.quali__pred_cut_s != null) bits.push("predicted " + fmtTime(r.quali__pred_cut_s));
+  if (r.quali__bubble_s != null) bits.push("bubble " + num(r.quali__bubble_s, 3) + " s");
+  bits.push(r.quali__n_on_track + " on track" + (r.quali__traffic_ahead != null ? ", " + r.quali__traffic_ahead + " just ahead of pit exit" : ""));
+  $("qsum").textContent = bits.join("  |  ");
+  const mine = focusSet(), tla = {}, rows = [];
+  for (const t of s.tower || []) tla[t.car] = t.tla;
+  const list = Object.keys(s.cars || {}).filter((n) => s.cars[n].quali__eligible).sort((a, b) => s.cars[a].quali__rank - s.cars[b].quali__rank);
+  for (const n of list) {
+    const v = s.cars[n], sd = SEND[v.quali__send] || ["", ""];
+    rows.push('<tr class="' + (mine.has(n) ? "mine " : "") + (v.quali__in_zone ? "zone" : "") + '"><td class="p">' + v.quali__rank + "</td><td>" + esc(tla[n] || n) +
+      "</td><td>" + fmtTime(v.quali__best_s) + "</td><td>" + (v.quali__gap_to_cut_s == null ? "--" : (v.quali__gap_to_cut_s > 0 ? "+" : "") + num(v.quali__gap_to_cut_s, 3)) +
+      "</td><td>" + (v.quali__p_ko == null ? "--" : pct(v.quali__p_ko)) + '</td><td class="' + sd[1] + '">' + sd[0] +
+      (v.quali__laps_needed && v.quali__send !== "SAFE" ? " (" + v.quali__laps_needed + " lap" + (v.quali__laps_needed > 1 ? "s" : "") + ")" : "") + "</td></tr>");
+  }
+  document.querySelector("#qtab tbody").innerHTML = rows.join("");
+}
+
 function renderTower(s) {
   const mine = focusSet(), cars = s.cars || {}, calls = {}, rows = [], out = [];
   for (const c of s.calls || []) calls[c.car] = c;
@@ -436,7 +465,7 @@ function render(s) {
   if (!s || s.waiting) return;
   s.extra = s.extra || {};
   snap = s;
-  renderHeader(s); renderTower(s); renderFocus(s); renderAlerts(s);
+  renderHeader(s); renderQuali(s); renderTower(s); renderFocus(s); renderAlerts(s);
   if (s.extra.team_radio) radioList = s.extra.team_radio;
   if (s.extra.positions) onPositions(s.extra.positions);
   renderMap(s); renderConvo(s);

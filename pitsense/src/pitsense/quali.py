@@ -136,6 +136,8 @@ def read(state: RaceState, tracker: QualiTracker) -> Picture | None:
         return None
     lines = td.get("Lines") or {}
     entries = tuple(int(x) for x in td.get("NoEntries") or DEFAULT_ENTRIES)
+    if min(entries) <= 0:  # the feed starts with [0, 0, 0] and fills it in when the session opens
+        entries = DEFAULT_ENTRIES
     flagged = [n for n, ln in lines.items() if isinstance(ln, dict) and ln.get("KnockedOut") is True]
     elig = [n for n, ln in lines.items() if isinstance(ln, dict) and ln.get("KnockedOut") is not True]
     bests = {n: _best(lines[n], part) for n in elig}
@@ -267,6 +269,8 @@ def guidance(state: RaceState, pic: Picture, c: CarQ, pred: float | None, n_on_t
     needs = c.best is None or c.in_zone or (pred is not None and c.best > pred)
     if pic.cut_pos is None:
         needs = True  # last part: every run is for the grid
+    if not pic.running:
+        return {"status": "SAFE" if d is None or d.in_pit else "ON_TRACK", "laps_needed": 0, "needs_run": False, "slack_s": None}
     laps = 0
     status = "SAFE"
     slack = None if (tl is None or out_s is None) else round(tl - out_s, 1)
