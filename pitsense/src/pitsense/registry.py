@@ -15,6 +15,7 @@ ENGINEERS: list[str] = [
     "pitsense.pitwall.engineers.tyre:TyreEngineer",
     "pitsense.pitwall.engineers.pitstop:PitStopEngineer",
     "pitsense.pitwall.engineers.rivals:RivalsEngineer",
+    "pitsense.pitwall.engineers.rivalradio:RivalRadio",
     "pitsense.pitwall.engineers.rules:RulesEngineer",
     "pitsense.pitwall.engineers.weather:WeatherEngineer",
     "pitsense.pitwall.engineers.mechanic_telemetry:MechanicTelemetry",
@@ -39,7 +40,7 @@ TASKS: list[str] = [
 
 # Extra models for the core tasks (bench/tasks.py), scored next to the built-in ones.
 TASK_MODELS: dict[str, list[str]] = {
-    "pit_within": [f"pitsense.bench.rivals:{n}" for n in ("RivalsPit", "RivalsPrior", "RivalsLogit", "RivalsLogitNoTeam", "RivalsGBM", "RivalsGBMNoTeam", "RivalsBlend")],  # every pit_within_k task
+    "pit_within": [f"pitsense.bench.rivals:{n}" for n in ("RivalsPit", "RivalsPrior", "RivalsLogit", "RivalsLogitNoTeam", "RivalsGBM", "RivalsGBMNoTeam", "RivalsBlend")] + [f"pitsense.bench.rivalradio:{n}" for n in ("RRGBMWithout", "RRGBMWith")],  # every pit_within_k task
     "position_after_stop": [
         "pitsense.bench.pitstop:PitstopRule",
         "pitsense.bench.pitstop:PitstopGBM",
@@ -59,6 +60,7 @@ LABELERS: list[str] = [
 COMMANDS: list[str] = [
     "pitsense.bench.rules:add_commands",
     "pitsense.bench.mechanics:add_commands",
+    "pitsense.bench.rivalradio:add_commands",
     "pitsense.modelstore:add_commands",
     "pitsense.pitwall.runtime:add_commands",
     "pitsense.bench.weather:add_commands",
