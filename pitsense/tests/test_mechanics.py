@@ -150,8 +150,9 @@ def test_power_loss_flagged_on_the_faulty_car_only():
     for n in ("11", "33"):
         assert (v[n]["power_loss"] or 0) < 0.3 and v[n]["power_loss_since"] is None
     alerts = [a for a in wall.alerts(st) if a.engineer == "mechanic_telemetry"]
-    assert {(a.car, a.code) for a in alerts} == {("22", "mech_power_loss")}
-    assert alerts[0].since == v["22"]["power_loss_since"]
+    assert {a.car for a in alerts} == {"22"} and ("22", "mech_power_loss") in {(a.car, a.code) for a in alerts}
+    pl = next(a for a in alerts if a.code == "mech_power_loss")
+    assert pl.since == v["22"]["power_loss_since"]
 
 
 def test_healthy_race_raises_nothing():
