@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import math
 import pickle
+import re
 import statistics
 import time
 from pathlib import Path
@@ -103,7 +104,7 @@ def record_race(session_dir: str, meta_name: str = "") -> dict:
     return {
         "slug": Path(session_dir).parent.name, "total": st.total_laps, "cols": cols, "laps": laps, "notrun": notrun,
         "last_move": last_move, "rc": [(m.t, m.lap, m.driver, m.message) for m in st.rc], "radio": radio,
-        "tla": {n: d.tla for n, d in st.drivers.items()}, "end_t": st.t, "seconds": time.time() - t_wall,
+        "tla": {n: d.tla for n, d in st.drivers.items()}, "end_t": st.t, "status": list(st.status_log), "seconds": time.time() - t_wall,
     }
 
 
@@ -172,7 +173,10 @@ def events_of(rec: dict) -> list[dict]:
     for car, (t_flag, laps) in rec["notrun"].items():
         if 2 <= laps <= total - 3:
             t0 = min(rec["last_move"].get(car, t_flag), t_flag)
-            ev.append({"car": car, "kind": "retire", "t0": t0, "t_end": t_flag, "lap": laps})
+            # "incident": a safety car / VSC / red flag or a yellow / incident message in the 2 minutes up to the stop
+            hot = any(t0 - 120 <= t <= t0 and code in ("2", "4", "5", "6", "7") for t, code in rec.get("status", []))
+            hot = hot or any(t0 - 120 <= t <= t0 and re.search(r"YELLOW|INCIDENT|COLLISION|CONTACT", m.upper()) for t, _, _, m in rec["rc"])
+            ev.append({"car": car, "kind": "retire_incident" if hot else "retire_quiet", "t0": t0, "t_end": t_flag, "lap": laps})
     cars = {l[0] for l in rec["laps"]}
     for car in sorted(cars):
         for lap, t0, t1, drop in lap_drops(rec, car):
@@ -223,6 +227,20 @@ def det_tel(rec: dict, checks, on: float, hold: float = None, off_ratio: float =
     return out
 
 
+def det_tel_union(rec: dict, params: dict):
+    """Any telemetry check, each at its own threshold."""
+    parts = [det_tel(rec, (chk,), params.get(name, 0.7)) for name, (chk, _) in GRIDS.items()]
+    out = {}
+    for car in rec["cols"]:
+        t = np.array(rec["cols"][car]["t"])
+        flags = np.zeros(len(t), bool)
+        for p in parts:
+            for r, end in p.get(car, []):
+                flags |= (t >= r) & (t <= end)
+        out[car] = ep_from_flags(t, flags)
+    return out
+
+
 def det_radio(rec: dict, thr: float):
     out = {}
     for car, c in rec["cols"].items():
@@ -265,7 +283,7 @@ def prepare(records: list[dict]) -> list[dict]:
     return records
 
 
-def score(records: list[dict], make, kinds=("retire", "slowdown", "rc_stop")) -> dict:
+def score(records: list[dict], make, kinds=("retire_quiet", "retire_incident", "slowdown", "rc_stop")) -> dict:
     """Score one detector. ``make(rec) -> {car: [(raised, last_seen)]}``."""
     stats = {k: {"n": 0, "pre": 0, "flag": 0, "lead_s": [], "lead_laps": []} for k in kinds}
     n_fa = 0
@@ -326,7 +344,7 @@ def detector_makers(params: dict):
     m = {}
     for name, (chk, _) in GRIDS.items():
         m[name] = (lambda rec, chk=chk, v=params.get(name, 0.7): det_tel(rec, (chk,), v))
-    m["tel_any"] = lambda rec: det_tel(rec, ALL_CHECKS, params.get("tel_any", 0.7))
+    m["tel_any"] = lambda rec: det_tel_union(rec, params)
     m["radio"] = lambda rec: det_radio(rec, params.get("radio", 0.5))
     m["chief"] = lambda rec: det_chief(rec, params.get("chief", 0.6))
     m["lapdrop_baseline"] = lambda rec: det_lapdrop(rec, params.get("lapdrop_baseline", 3.0))
@@ -335,27 +353,28 @@ def detector_makers(params: dict):
 
 GRID_ALL = {
     **{k: v[1] for k, v in GRIDS.items()},
-    "tel_any": [0.5, 0.6, 0.7, 0.8, 0.9],
     "radio": [0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
-    "chief": [0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+    "chief": [0.6, 0.7, 0.8, 0.9],
     "lapdrop_baseline": [1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0],
 }
 
 
 def tune(records: list[dict], budget: float = FA_BUDGET) -> tuple[dict, dict]:
-    """Per detector: the threshold with the best recall_pre (then recall_flag) within the false-alarm budget."""
+    """Per detector: among thresholds within the false-alarm budget, the strictest one that keeps at least
+    90 % of the best recall by timing flag (so a handful of events cannot pull it to the loosest setting)."""
     params, table = {}, {}
     for name, grid in GRID_ALL.items():
-        best = None
         rows = []
         for v in grid:
-            mk = detector_makers({name: v})[name]
-            r = score(records, mk)
+            r = score(records, detector_makers({name: v})[name])
             rows.append((v, r))
-            key = (r["fa"] <= budget, r["recall_pre"] if r["fa"] <= budget else -r["fa"], r["recall_flag"])
-            if best is None or key > best[0]:
-                best = (key, v, r)
-        params[name] = best[1]
+        ok = [(v, r) for v, r in rows if r["fa"] <= budget]
+        if not ok:  # nothing within budget: the strictest setting
+            params[name] = max(grid) if name != "lapdrop_baseline" else max(grid)
+        else:
+            best = max(r["flag"] + r["pre"] for _, r in ok)
+            keep = [(v, r) for v, r in ok if r["flag"] + r["pre"] >= 0.9 * best]
+            params[name] = max(v for v, _ in keep)
         table[name] = rows
     return params, table
 
@@ -366,6 +385,14 @@ def fmt_table(rows: list[tuple[str, dict]]) -> str:
     for name, r in rows:
         out.append(f"| {name} | {r['n']} | {r['recall_pre']:.2f} ({r['pre']}) | {r['recall_flag']:.2f} ({r['flag']}) | "
                    f"{r['lead_s']:.0f} | {r['lead_laps']:.1f} | {r['fa']:.2f} ({r['n_fa']}) |")
+    return "\n".join(out)
+
+
+def fmt_curve(table: dict) -> str:
+    out = ["| detector | threshold | recall before | recall by flag | false alarms / car-race |", "|---|---|---|---|---|"]
+    for name, rows in table.items():
+        for v, r in rows:
+            out.append(f"| {name} | {v} | {r['recall_pre']:.2f} | {r['recall_flag']:.2f} | {r['fa']:.2f} |")
     return "\n".join(out)
 
 
@@ -388,11 +415,11 @@ def examples(records: list[dict], name: str, params: dict, limit: int = 12) -> l
         for e in rec["events"]:
             lo = e["t0"] - PRE_LAPS * L
             hits = [r for r, end in eps.get(e["car"], []) if r <= e["t_end"] and end >= lo]
-            if hits and e["kind"] in ("retire", "slowdown"):
+            if hits and e["kind"] in ("retire_quiet", "retire_incident", "slowdown"):
                 r = min(hits)
                 tla = rec["tla"].get(e["car"], e["car"])
                 out.append((e["t_end"] - r, f"{rec['slug'][:10]} car {e['car']} {tla} {e['kind']} lap {e['lap']}: raised {(e['t_end'] - r) / L:+.1f} laps "
-                            f"({e['t_end'] - r:.0f} s) before {'the timing flag' if e['kind'] == 'retire' else 'the lap was published'}"))
+                            f"({e['t_end'] - r:.0f} s) before {'the timing flag' if e['kind'].startswith('retire') else 'the lap was published'}"))
     out.sort(key=lambda x: -x[0])
     return [x[1] for x in out[:limit]]
 
@@ -402,7 +429,7 @@ def chief_alert_examples(records: list[dict], limit: int = 8) -> list[str]:
     for rec in records:
         L = rec["L"]
         for e in rec["events"]:
-            if e["kind"] != "retire":
+            if not e["kind"].startswith("retire"):
                 continue
             c = rec["cols"].get(e["car"])
             if not c:
@@ -426,7 +453,7 @@ def report(years_tune=(2025,), years_final=(2026,), jobs: int = 3, refresh: bool
     names = list(mk)
     lines += ["", f"## {years_tune} (tuning year)", ""]
     tune_rows = [(n, score(rec_t, mk[n])) for n in names]
-    lines += [fmt_table(tune_rows), "", fmt_kinds(tune_rows)]
+    lines += [fmt_table(tune_rows), "", fmt_kinds(tune_rows), "", "### Threshold curves on the tuning year", "", fmt_curve(table)]
     rec_f = []
     if years_final:
         rec_f = prepare(load_records(years_final, jobs, refresh))

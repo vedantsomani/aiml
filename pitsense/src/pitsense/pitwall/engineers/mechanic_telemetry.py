@@ -43,11 +43,12 @@ LAG_S = 150.0  # the baseline only sees samples at least this old ...
 SPAN_S = 1500.0  # ... and at most this old
 WIN_S = 75.0  # "now" = the last this-many seconds of the car's own clock
 MIN_BASE = 40  # samples before the own baseline is trusted (else the field, 1.0)
+CLEAR_GAP_S = 1.8  # full-throttle speed is only compared with the car's own when no car is within this gap ahead
 MIN_REF = 40  # samples in a grid cell before it is a reference
 
 # (on, off, hold_s, clear_s): level-triggered alert thresholds, chosen on 2025 (bench/mechanics.py)
 THRESH: dict[str, tuple[float, float, float, float]] = {
-    "power_loss": (0.6, 0.35, 12.0, 30.0),
+    "power_loss": (0.6, 0.35, 20.0, 30.0),
     "gearbox": (0.6, 0.35, 8.0, 30.0),
     "brake_issue": (0.7, 0.4, 12.0, 30.0),
     "slow_car": (0.8, 0.5, 8.0, 20.0),
@@ -217,7 +218,9 @@ class CarTrack:
         self.pw = _Check()  # full-throttle speed / field speed in the cell
         self.rp = _Check()  # full-throttle rpm / field rpm in the cell
         self.gr = _Check()  # |rpm/speed| / field ratio of the gear (signed, stable gear)
+        self.pc = _Check()  # pace: speed / field median speed of the cell, all samples
         self.bk = _Check()  # braking: decel / field decel for the entry speed
+        self.still = Series()  # 1 when standing (< 15 km/h) on track
         self.slow = Series()  # 1 when speed < 0.6 * p20 of the cell, else 0
         self.coast = Series()  # 1 when coasting on a straight cell
         self.neutral = Series()  # 1 when gear 0 and moving
@@ -261,6 +264,7 @@ class MechanicTelemetry(Engineer):
         last, self._last_ingest = self._last_ingest, state.t
         span = min(INGEST_S + 2.0 + (state.t - last if last > -1e17 else 0.0), 600.0)
         gate = self._gate_state(state)
+        loose = self._loose_gate(state)
         batches = []
         for car in tel.cars():
             d = state.drivers.get(car)
@@ -276,24 +280,48 @@ class MechanicTelemetry(Engineer):
                 continue
             pos = tel.position_history(car, last_s=span + 4.0)
             b = self._prepare(tr, data, pos, new)
-            ok = gate and d is not None and self._car_ok(state, d)
-            batches.append((car, tr, b, ok))
+            car_ok = d is not None and self._car_ok(state, d)
+            ok = gate and car_ok
+            batches.append((car, tr, b, ok, loose and car_ok))
         # all cars are measured against the reference as it stood before this ingest
-        for car, tr, b, ok in batches:
+        pending = []
+        for car, tr, b, ok, lo in batches:
             if b is not None and ok:
-                self._measure(tr, b)
+                d = state.drivers[car]
+                clear_air = d.interval is None or d.interval >= CLEAR_GAP_S  # no slipstream to inflate the baseline
+                pending.append((tr, self._measure(tr, b, clear_air)))
+            elif b is not None and lo:
+                self._still(tr, b)
             if b is not None:
                 tr.last_utc = float(b["utc"][-1])
-        for car, tr, b, ok in batches:
+        # conditions that move every car together (rain, a restart, wind) are divided out
+        for key in ("pw", "rp", "bk", "pc"):
+            meds = [float(np.median(p[key][1])) for _, p in pending if len(p[key][1]) >= 2]
+            common = float(np.median(meds)) if len(meds) >= 5 else 1.0
+            for tr, p in pending:
+                if len(p[key][0]):
+                    getattr(tr, key).feed(p[key][0], p[key][1] / common)
+        for car, tr, b, ok, lo in batches:
             if b is not None and ok:
                 self._learn(b)
-        for car, tr, b, ok in batches:
+        for car, tr, b, ok, lo in batches:
             self._score(tr, state.t)
 
     @staticmethod
     def _gate_state(state: RaceState) -> bool:
         return (
             state.track_status == "1"
+            and state.session_status == "Started"
+            and state.finished_t is None
+            and state.current_lap >= 2
+            and not (state.total_laps and max((d.laps for d in state.drivers.values()), default=0) >= state.total_laps)
+        )
+
+    @staticmethod
+    def _loose_gate(state: RaceState) -> bool:
+        """Racing, but not necessarily green: a car standing still on track is wrong under any flag but red."""
+        return (
+            state.track_status != "5"
             and state.session_status == "Started"
             and state.finished_t is None
             and state.current_lap >= 2
@@ -330,7 +358,11 @@ class MechanicTelemetry(Engineer):
     def _drs_key(self, drs: np.ndarray) -> np.ndarray:
         return (drs >= 8).astype(np.int64)
 
-    def _measure(self, tr: CarTrack, b: dict) -> None:
+    def _still(self, tr: CarTrack, b: dict) -> None:
+        mv = b["valid"] & (b["cell"] >= 0)
+        tr.still.add(b["utc"][mv], (b["speed"][mv] < 15).astype(float))
+
+    def _measure(self, tr: CarTrack, b: dict, clear_air: bool = True) -> dict:
         u, speed, rpm, gear, thr, brk = b["utc"], b["speed"], b["rpm"], b["gear"], b["thr"], b["brk"]
         cell, valid = b["cell"], b["valid"]
         dk = self._drs_key(b["drs"])
@@ -338,7 +370,7 @@ class MechanicTelemetry(Engineer):
         # ---- full-throttle speed / rpm against the field in the same cell
         full = valid & (thr >= 99) & (brk == 0) & (speed > 100) & (cell >= 0)
         ts, rs, rr = [], [], []
-        for i in np.flatnonzero(full):
+        for i in np.flatnonzero(full if clear_air else full & False):
             key = (int(cell[i]), int(dk[i]))
             m = self.ref_speed.stat(key)
             if m is None:
@@ -347,19 +379,23 @@ class MechanicTelemetry(Engineer):
             rs.append(speed[i] / m)
             mr = self.ref_rpm.stat(key)
             rr.append(rpm[i] / mr if mr else np.nan)
-        if ts:
-            tr.pw.feed(np.array(ts), np.array(rs))
-            rr_a = np.array(rr)
-            keep = np.isfinite(rr_a)
-            tr.rp.feed(np.array(ts)[keep], rr_a[keep])
+        rr_a = np.array(rr)
+        keep = np.isfinite(rr_a)
+        pend = {"pw": (np.array(ts), np.array(rs)), "rp": (np.array(ts)[keep], rr_a[keep])}
+        self._still(tr, b)
         # ---- slow / coasting against the field
         sl_t, sl_v, co_v = [], [], []
+        pc_t, pc_v = [], []
         mv = valid & (cell >= 0) & (speed >= 0)
         for i in np.flatnonzero(mv):
             c = int(cell[i])
             lo = self.ref_all.stat(c, 20.0)
             if lo is None or lo < 60:
                 continue
+            md = self.ref_all.stat(c, 50.0)
+            if speed[i] > 60 and md and md > 80:
+                pc_t.append(u[i])
+                pc_v.append(speed[i] / md)
             sl_t.append(u[i])
             sl_v.append(1.0 if speed[i] < 0.6 * lo else 0.0)
             share = self.ref_full_share.stat(c, 50.0, 80)
@@ -410,9 +446,11 @@ class MechanicTelemetry(Engineer):
                 tr.bad_gear.add(np.array(tt), np.array(vals))
         tr.last_gear = float(gear[-1])
         # ---- braking phases (brake on from speed): decel against the field
-        self._brake_phases(tr, b)
+        pend["bk"] = self._brake_phases(tr, b)
+        pend["pc"] = (np.array(pc_t), np.array(pc_v))
+        return pend
 
-    def _brake_phases(self, tr: CarTrack, b: dict) -> None:
+    def _brake_phases(self, tr: CarTrack, b: dict) -> tuple[np.ndarray, np.ndarray]:
         u, speed, brk, valid = b["utc"], b["speed"], b["brk"], b["valid"]
         ts, vs = [], []
         op = tr.brake_open
@@ -441,8 +479,7 @@ class MechanicTelemetry(Engineer):
         if op is not None and float(u[-1]) - op[0] > 9.0 and op[2] > 60:  # held on for 8 s at speed
             tr.long_brake.add(np.array([float(u[-1])]), np.array([float(u[-1]) - op[0]]))
         tr.brake_open = op
-        if ts:
-            tr.bk.feed(np.array(ts), np.array(vs))
+        return np.array(ts), np.array(vs)
 
     def _learn(self, b: dict) -> None:
         u, speed, rpm, gear, thr, brk, cell, valid = (b[k] for k in ("utc", "speed", "rpm", "gear", "thr", "brk", "cell", "valid"))
@@ -468,7 +505,7 @@ class MechanicTelemetry(Engineer):
     # ------------------------------------------------------------------ scores
     def _score(self, tr: CarTrack, t: float) -> None:
         now = tr.last_utc
-        for ch in (tr.pw, tr.rp, tr.gr, tr.bk):
+        for ch in (tr.pw, tr.rp, tr.gr, tr.bk, tr.pc):
             ch.roll(now, frozen=any(l.active for l in tr.levels.values()))
         sc: dict[str, float | None] = {}
         # power: speed at full throttle, backed by rpm
@@ -476,7 +513,7 @@ class MechanicTelemetry(Engineer):
         s_pow = None
         if p is not None:
             drop, z, n, _ = p
-            s_pow = _clip01((drop - 0.012) / 0.04) * _clip01(z / 4.0)
+            s_pow = _clip01((drop - 0.02) / 0.05) * _clip01(z / 4.0)
             tr.detail["pw_drop"] = round(float(drop), 4)
             tr.detail["pw_z"] = round(float(z), 2)
         r = tr.rp.compare(now)
@@ -523,17 +560,27 @@ class MechanicTelemetry(Engineer):
         if c is not None:
             drop, z, n, _ = c
             s = _clip01((drop - 0.10) / 0.25) * _clip01(z / 4.0)
-        lb = tr.long_brake.between(now - 60.0, now)
-        if len(lb) and float(lb.max()) >= 9.0:  # brakes held on for 9 s at speed
-            s = max(s or 0.0, 0.8)
         return s
 
     def _slow(self, tr: CarTrack, now: float) -> float | None:
+        out = []
+        st = tr.still.between(now - 12.0, now)
+        if len(st) >= 20:
+            out.append(_clip01((float(st.mean()) - 0.7) / 0.25))  # standing on track for most of 12 s
         sl = tr.slow.between(now - 12.0, now)
-        co = tr.coast.between(now - 12.0, now)
-        if len(sl) < 20:
-            return None
-        return max(_clip01((float(sl.mean()) - 0.6) / 0.3), _clip01((float(co.mean()) - 0.5) / 0.4) * 0.9)
+        if len(sl) >= 20:
+            co = tr.coast.between(now - 12.0, now)
+            base = tr.slow.between(now - SPAN_S, now - LAG_S)
+            # a car that is "slow" in its own early laps has a position/cell mismatch, not a fault
+            lo = max(0.6, float(base.mean()) + 0.35) if len(base) >= 100 else 0.6
+            out.append(_clip01((float(sl.mean()) - lo) / 0.3))
+            out.append(_clip01((float(co.mean()) - 0.5) / 0.4) * 0.9)
+        pc = tr.pc.compare(now, min_cur=30)
+        if pc is not None:  # sudden pace collapse: speed against the field, all samples, 8 % down for a lap
+            drop, z, n, _ = pc
+            out.append(_clip01((drop - 0.04) / 0.10) * _clip01(z / 4.0))
+            tr.detail["pc_drop"] = round(float(drop), 4)
+        return max(out) if out else None
 
     # ------------------------------------------------------------------ outputs
     def car(self, state, number, view):
