@@ -14,9 +14,18 @@ deterministic (greedy decoding, temperature 0). Transcripts are *known* in repla
 from __future__ import annotations
 
 import json
+import logging
 import os
+import queue
+import re
+import threading
 import time
+import urllib.request
 from pathlib import Path
+
+log = logging.getLogger("pitsense.radio")
+STATIC_URL = "https://livetiming.formula1.com/static/"
+CLIP_RE = re.compile(r"^TeamRadio/[A-Za-z0-9_.-]+\.mp3$")  # the only capture paths we ever fetch
 
 DEFAULT_MODEL = "small.en"
 # Biases decoding toward pit-wall vocabulary; it names no race facts.
@@ -45,6 +54,13 @@ def load_model(name: str = DEFAULT_MODEL, device: str = "cuda"):
 
 def transcript_path(mp3: Path) -> Path:
     return mp3.with_suffix(".json")
+
+
+def write_transcript(mp3: Path, result: dict) -> None:
+    out = transcript_path(mp3)
+    tmp = out.with_suffix(".part")
+    tmp.write_text(json.dumps(result, indent=1), encoding="utf-8")
+    tmp.replace(out)  # atomic: a reader sees all of it or nothing
 
 
 def decode_audio(mp3: Path):
@@ -89,12 +105,160 @@ def transcribe_session(session_dir: Path, model, model_name: str = DEFAULT_MODEL
             result = transcribe_file(model, mp3, model_name)
         except Exception as exc:  # a corrupt clip must not stop the batch
             result = {"file": mp3.name, "model": model_name, "duration_s": 0.0, "text": "", "segments": [], "error": str(exc)[:200]}
-        tmp = out.with_suffix(".part")
-        tmp.write_text(json.dumps(result, indent=1), encoding="utf-8")
-        tmp.replace(out)
+        write_transcript(mp3, result)
         done += 1
         audio_s += result["duration_s"]
     return done, audio_s
+
+
+def http_download(url: str, dest: Path, timeout: float = 10.0) -> None:
+    req = urllib.request.Request(url, headers={"User-Agent": "pitsense"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        body = r.read()
+    if not body:
+        raise OSError("empty response")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".part")
+    tmp.write_bytes(body)
+    tmp.replace(dest)
+
+
+class LiveRadio:
+    """Live team radio: download each new clip, then transcribe it, both off the caller's thread.
+
+    ``submit(path)`` (a capture path like ``TeamRadio/X.mp3``) only queues. One thread downloads
+    ``base_url + session_path + path`` into ``session_dir/<path>`` (a few retries, then it gives up
+    quietly: offline means no audio, never a crash); a second thread runs the transcriber and writes
+    ``X.json`` next to the mp3 once it is really done. The race state shows the text when that file
+    exists, so live latency is real latency. Clips already on disk (mp3 or transcript) are reused.
+    ``downloader(url, dest)`` and ``transcriber(mp3) -> dict`` can be replaced (tests).
+    """
+
+    def __init__(self, session_dir: Path, *, base_url: str = STATIC_URL, downloader=None, transcriber=None,
+                 model_name: str = DEFAULT_MODEL, transcribe: bool = True, retries: int = 3, backoff_s: float = 2.0) -> None:
+        self.dir = Path(session_dir)
+        self.base_url, self.model_name, self.retries, self.backoff_s = base_url, model_name, retries, backoff_s
+        self.downloader = downloader or http_download
+        self.transcriber = transcriber
+        self.do_transcribe = transcribe
+        self.session_path: str | None = None
+        self.stats = {"queued": 0, "downloaded": 0, "reused": 0, "download_failed": 0, "transcribed": 0, "transcribe_failed": 0}
+        self.error: str | None = None  # last problem, for /api/health
+        self._seen: set[str] = set()
+        self._pending: list[str] = []  # submitted before the session path was known
+        self._lock = threading.Lock()
+        self._dl: queue.Queue = queue.Queue()
+        self._tr: queue.Queue = queue.Queue()
+        self._threads: list[threading.Thread] = []
+        self._stop = threading.Event()
+
+    def set_session_path(self, path: str | None) -> None:
+        if not path or self.session_path == path:
+            return
+        with self._lock:
+            self.session_path = path
+            pending, self._pending = self._pending, []
+        for p in pending:
+            self._dl.put(p)
+
+    def submit(self, path: str) -> None:
+        if not isinstance(path, str) or not CLIP_RE.match(path):
+            return
+        with self._lock:
+            if path in self._seen:
+                return
+            self._seen.add(path)
+            self.stats["queued"] += 1
+            known = self.session_path is not None
+            if not known:
+                self._pending.append(path)
+        self._ensure_threads()
+        if known:
+            self._dl.put(path)
+
+    def _ensure_threads(self) -> None:
+        with self._lock:
+            if self._threads:
+                return
+            self._threads = [threading.Thread(target=self._download_loop, name="pitsense-radio-dl", daemon=True),
+                             threading.Thread(target=self._transcribe_loop, name="pitsense-radio-asr", daemon=True)]
+        for t in self._threads:
+            t.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def join(self, timeout: float = 10.0) -> bool:
+        """Wait until everything queued so far is downloaded and transcribed (tests)."""
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            with self._lock:
+                waiting = bool(self._pending)
+            if not waiting and self._dl.unfinished_tasks == 0 and self._tr.unfinished_tasks == 0:
+                return True
+            time.sleep(0.02)
+        return False
+
+    def _download_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                path = self._dl.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                self._fetch(path)
+            except Exception as exc:  # never kill the worker
+                self.stats["download_failed"] += 1
+                self.error = f"download: {type(exc).__name__}: {str(exc)[:120]}"
+            finally:
+                self._dl.task_done()
+
+    def _fetch(self, path: str) -> None:
+        dest = self.dir / path
+        if dest.is_file():
+            self.stats["reused"] += 1
+        else:
+            url = f"{self.base_url}{self.session_path}{path}"
+            for attempt in range(self.retries):
+                try:
+                    self.downloader(url, dest)
+                    self.stats["downloaded"] += 1
+                    break
+                except Exception as exc:
+                    self.error = f"download: {type(exc).__name__}: {str(exc)[:120]}"
+                    if attempt + 1 < self.retries and not self._stop.wait(self.backoff_s * (attempt + 1)):
+                        continue
+                    self.stats["download_failed"] += 1
+                    log.warning("radio clip %s not saved (%s)", path, self.error)
+                    return
+        if self.do_transcribe and not transcript_path(dest).exists():
+            self._tr.put(dest)
+
+    def _transcribe_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                mp3 = self._tr.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                if self.transcriber is None:
+                    self.transcriber = self._default_transcriber()
+                write_transcript(mp3, self.transcriber(mp3))
+                self.stats["transcribed"] += 1
+            except Exception as exc:
+                self.stats["transcribe_failed"] += 1
+                self.error = f"transcribe: {type(exc).__name__}: {str(exc)[:120]}"
+                if self.transcriber is None:  # model could not load: keep the audio, stop transcribing
+                    self.do_transcribe = False
+            finally:
+                self._tr.task_done()
+
+    def _default_transcriber(self):
+        try:
+            model = load_model(self.model_name, "cuda")
+        except Exception:
+            model = load_model(self.model_name, "cpu")
+        return lambda mp3: transcribe_file(model, mp3, self.model_name)
 
 
 def add_commands(sub) -> None:

@@ -105,14 +105,20 @@ class FollowSource(Source):
     mode = "follow"
 
     def __init__(self, path: Path, *, follow: bool = True, poll_s: float = 0.25,
-                 idle_exit_s: float | None = None, mode: str | None = None) -> None:
-        from ..live import RecordingTail
+                 idle_exit_s: float | None = None, mode: str | None = None, radio=None) -> None:
+        from ..live import RecordingTail, session_dir_for
 
         self.path, self.follow, self.poll_s, self.idle_exit_s = Path(path), follow, poll_s, idle_exit_s
         self.tail = RecordingTail(self.path, feeds=True)
         self.title = self.path.name
-        self.meta = {"source": str(self.path)}
+        self.radio_dir = session_dir_for(self.path)  # mp3s and transcripts saved next to the recording
+        self.meta = {"source": str(self.path), "radio_dir": str(self.radio_dir)}
         self.speed = 1.0
+        if radio is None:  # downloads missing clips and transcribes them in background threads
+            from ..radio import LiveRadio
+
+            radio = LiveRadio(self.radio_dir)
+        self.radio = radio or None  # radio=False: use only what is already on disk
         if mode:
             self.mode = mode
 
@@ -139,7 +145,7 @@ class LiveSource(FollowSource):
     mode = "live"
 
     def __init__(self, out: Path, *, minutes: float = 180.0, no_auth: bool = False, **kw) -> None:
-        super().__init__(out, follow=True, **kw)
+        super().__init__(out, follow=True, **kw)  # makes self.radio
         self.out, self.minutes, self.no_auth = Path(out), minutes, no_auth
         self.recorder_error: str | None = None
         self._thread: threading.Thread | None = None
@@ -153,7 +159,7 @@ class LiveSource(FollowSource):
 
         def run() -> None:
             try:
-                record(self.out, minutes=self.minutes, no_auth=self.no_auth)
+                record(self.out, minutes=self.minutes, no_auth=self.no_auth, radio=self.radio)
             except Exception as exc:  # shown in /api/health
                 self.recorder_error = f"{type(exc).__name__}: {exc}"
                 log.exception("recorder stopped")
@@ -198,6 +204,15 @@ def infer_positions(state: RaceState) -> None:
 
 
 # ----------------------------------------------------------------------------- runtime
+def _merge(into: dict, update: dict) -> None:
+    """Deep-merge a SessionInfo delta into what we know (deltas carry only the changed fields)."""
+    for k, v in update.items():
+        if isinstance(v, dict) and isinstance(into.get(k), dict):
+            _merge(into[k], v)
+        else:
+            into[k] = json.loads(json.dumps(v))
+
+
 def _json_bytes(obj) -> bytes:
     return json.dumps(obj, separators=(",", ":"), allow_nan=False, default=str).encode()
 
@@ -256,6 +271,10 @@ class PitWallRuntime:
         self._pos_t: float | None = None
         self._pos_wall = 0.0
         self.positions: dict = {}
+        self.session_info: dict = {}  # SessionInfo merged over its messages: circuit, start, static path
+        self.radio_worker = getattr(source, "radio", None)
+        self._live_track_wall = 0.0
+        self._live_track_tries = 0
         self._radio_lap: dict[str, int] = {}  # mp3 path -> leader lap when it was published
         self._radio_list: list[dict] = []
         self._radio_wall = 0.0
@@ -317,6 +336,8 @@ class PitWallRuntime:
         self.stop_event.set()
         if self.thread is not None:
             self.thread.join(timeout=10)
+        if self.radio_worker is not None:
+            self.radio_worker.stop()
         if self._log_fh:
             self._log_fh.close()
             self._log_fh = None
@@ -351,9 +372,13 @@ class PitWallRuntime:
         state.apply(e)
         self.n_events += 1
         self.last_event_wall = time.time()
+        if e.topic == "SessionInfo" and isinstance(e.data, dict):
+            _merge(self.session_info, e.data)
+            self._feed_radio(e)
         if e.topic in FEED_TOPICS:  # feeds never change the timing state: no engineers, no snapshot
             if e.topic == "TeamRadio":
                 self._note_radio_laps()
+                self._feed_radio(e)
             if e.topic == "Position.z":
                 self._maybe_push_positions()
             return
@@ -402,21 +427,53 @@ class PitWallRuntime:
         return d
 
     # --------------------------------------------------------------- positions, track, team radio
-    def _find_track(self) -> None:
-        """The circuit outline known before this race (``trackmap.track_asof``); once per session."""
-        self._track_done = True
-        ref, start = self.source.ref, self.source.start_utc
-        if ref is None or start is None:
-            return
-        try:
-            from ..trackmap import track_asof
+    def _feed_radio(self, e: _events.Event) -> None:
+        """Queue clip downloads (the worker never blocks this loop). Safe if the recorder queued them too."""
+        if self.radio_worker is not None:
+            from ..live import feed_radio
 
-            t = track_asof(ref.circuit_key, start)
+            feed_radio(self.radio_worker, e.topic, e.data)
+
+    def _find_track(self) -> None:
+        """The circuit outline known before this race (``trackmap.track_asof``); once per session.
+
+        The circuit and start come from the archive ref, or, live, from the SessionInfo message
+        (``Meeting.Circuit.Key``, ``StartDate`` + ``GmtOffset``); until that arrives we ask again later.
+        """
+        from ..trackmap import session_circuit, track_asof
+
+        ref, start = self.source.ref, self.source.start_utc
+        if ref is not None and start is not None:
+            key = ref.circuit_key
+        else:
+            got = session_circuit(self.session_info)
+            if got is None:
+                return
+            key, start = got
+        self._track_done = True
+        try:
+            t = track_asof(key, start)
         except Exception:
             log.exception("track outline failed")
             return
         if t:
-            self.track = {k: t.get(k) for k in ("x", "y", "start", "pit")} | {"key": f"{ref.circuit_key}:{t.get('end_utc')}"}
+            self.track = {k: t.get(k) for k in ("x", "y", "start", "pit")} | {"key": f"{key}:{t.get('end_utc')}"}
+
+    def _live_track(self) -> None:
+        """No stored outline: build one from the cars' published positions once 2 laps are done (as-of)."""
+        now = time.monotonic()
+        if self.track is not None or self.state.current_lap < 3 or self._live_track_tries >= 20                 or now - self._live_track_wall < 10.0:
+            return
+        self._live_track_wall, self._live_track_tries = now, self._live_track_tries + 1
+        try:
+            from ..trackmap import live_outline
+
+            t = live_outline(self.state)
+        except Exception:
+            log.exception("live track outline failed")
+            return
+        if t:
+            self.track = {k: t.get(k) for k in ("x", "y", "start", "pit")} | {"key": f"live:{round(self.state.t)}", "provisional": True}
 
     def _positions(self) -> dict:
         """Newest published position of every car: {car: [x, y, on_track]} (as-of the feed clock)."""
@@ -439,19 +496,21 @@ class PitWallRuntime:
         self._radio_wall = now
         store = self.state.feeds.radio
         tla = {n: d.tla for n, d in self.state.drivers.items()}
+        live = self.radio_worker is not None  # the mp3 may still be downloading: link it only once it is there
         idx: dict[str, int] = {}
         out = []
         for m in store.messages():
             i = idx[m.car] = idx.get(m.car, -1) + 1  # index among that car's messages (see team_radio_file)
             lap = self._radio_lap.setdefault(m.path, self.state.current_lap)
             out.append({"id": f"{m.car}:{i}", "car": m.car, "tla": tla.get(m.car), "t": round(m.t, 1), "lap": lap,
-                        "text": m.text or None, "audio": f"/api/teamradio?car={m.car}&i={i}" if m.audio else None})
+                        "text": m.text or None, "audio": f"/api/teamradio?car={m.car}&i={i}" if m.audio and (not live or Path(m.audio).is_file()) else None})
         self._radio_list = out[-RADIO_KEEP:]
         return self._radio_list
 
     def _feed_extra(self, state: RaceState) -> dict:
-        if not self._track_done and self.source.start_utc is not None:
+        if not self._track_done:
             self._find_track()
+        self._live_track()
         self.positions = self._positions()
         self._pos_t = state.t
         return {"positions": {"t": round(state.t, 1), "cars": self.positions},
@@ -586,6 +645,8 @@ class PitWallRuntime:
             "snapshot_ms_max": round(ms[-1], 2) if ms else None,
             "call_log": str(self.log_path) if self.log_path else None,
             "recorder_error": getattr(self.source, "recorder_error", None),
+            "radio": None if self.radio_worker is None else dict(self.radio_worker.stats, error=self.radio_worker.error),
+            "track": None if self.track is None else ("provisional" if self.track.get("provisional") else "stored"),
         }
 
     def team_radio_file(self, car: str, i: int) -> Path | None:

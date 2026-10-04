@@ -30,7 +30,29 @@ TOPICS = [
 ]
 
 
-def _make_client(out: Path, *, no_auth: bool, timeout: int, deadline: float | None = None):
+def session_dir_for(recording: Path) -> Path:
+    """Folder for a recording's own downloads (team-radio mp3s and transcripts): ``<name>.session/``."""
+    recording = Path(recording)
+    return recording.with_name(recording.stem + ".session")
+
+
+def feed_radio(radio, topic: str, data) -> None:
+    """Hand what a live message says about radio to a :class:`pitsense.radio.LiveRadio` (queues only, never blocks).
+
+    SessionInfo names the static path of the session; every TeamRadio capture names an mp3 under it.
+    """
+    if radio is None or not isinstance(data, dict):
+        return
+    if topic == "SessionInfo":
+        radio.set_session_path(data.get("Path"))
+    elif topic == "TeamRadio":
+        caps = data.get("Captures") or ()
+        for c in (caps.values() if isinstance(caps, dict) else caps):
+            if isinstance(c, dict):
+                radio.submit(c.get("Path"))
+
+
+def _make_client(out: Path, *, no_auth: bool, timeout: int, deadline: float | None = None, radio=None):
     from fastf1.livetiming.client import SignalRClient  # optional dependency
     from signalrcore.messages.completion_message import CompletionMessage
 
@@ -41,6 +63,7 @@ def _make_client(out: Path, *, no_auth: bool, timeout: int, deadline: float | No
             self.n_messages = 0
             self.interrupted = False
             self.deadline = deadline
+            self.radio = radio  # saves team-radio mp3s next to the recording
 
         def _supervise(self) -> None:
             # FastF1's version only stops when the feed goes quiet; heartbeats keep it alive
@@ -114,9 +137,11 @@ def _make_client(out: Path, *, no_auth: bool, timeout: int, deadline: float | No
                 if isinstance(msg, CompletionMessage):
                     for topic, data in (msg.result or {}).items():
                         self._write({"recv": recv, "topic": topic, "kind": "snapshot", "data": data})
+                        feed_radio(self.radio, topic, data)
                 elif isinstance(msg, list) and len(msg) >= 2:
                     self._write({"recv": recv, "topic": msg[0], "kind": "delta", "data": msg[1],
                                  "utc": msg[2] if len(msg) > 2 else None})
+                    feed_radio(self.radio, msg[0], msg[1])
             except Exception:  # never let a bad message kill the recording
                 self.logger.exception("could not write message")
 
@@ -139,14 +164,22 @@ def _cleanup(client) -> None:
         f.close()
 
 
-def record(out: Path, *, minutes: float = 180.0, no_auth: bool = False, idle_timeout: int = 120) -> int:
-    """Record until ``minutes`` have passed, reconnecting after drop-outs. Returns message count."""
+def record(out: Path, *, minutes: float = 180.0, no_auth: bool = False, idle_timeout: int = 120, radio=None) -> int:
+    """Record until ``minutes`` have passed, reconnecting after drop-outs. Returns message count.
+
+    Team-radio clips are downloaded (and transcribed) in background threads into
+    ``session_dir_for(out)``; pass your own ``LiveRadio`` as ``radio``, or None to make one.
+    """
+    if radio is None:
+        from .radio import LiveRadio
+
+        radio = LiveRadio(session_dir_for(out))
     out.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.time() + minutes * 60
     total = 0
     log = logging.getLogger("pitsense.record")
     while time.time() < deadline:
-        client = _make_client(out, no_auth=no_auth, timeout=idle_timeout, deadline=deadline)
+        client = _make_client(out, no_auth=no_auth, timeout=idle_timeout, deadline=deadline, radio=radio)
         try:
             client.start()  # blocks until idle timeout or Ctrl+C
         except KeyboardInterrupt:

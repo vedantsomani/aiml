@@ -189,6 +189,7 @@ class TranscriptCache:
 
     def __init__(self, session_dir: Path | None) -> None:
         self.dir = None if session_dir is None else Path(session_dir)
+        self._text: dict[str, str] = {}  # transcripts found so far (a file, once written, never changes)
 
     def audio_path(self, path: str) -> Path | None:
         return None if self.dir is None else self.dir / path
@@ -197,13 +198,18 @@ class TranscriptCache:
         audio = self.audio_path(path)
         if audio is None:
             return None
+        if path in self._text:
+            return self._text[path]
         f = audio.with_suffix(".json")
         if not f.exists():
             return None
         try:
-            return json.loads(f.read_text(encoding="utf-8")).get("text")
+            text = json.loads(f.read_text(encoding="utf-8")).get("text")
         except (OSError, ValueError):
             return None
+        if text is not None:
+            self._text[path] = text
+        return text
 
 
 class RadioStore:
@@ -259,7 +265,10 @@ class Feeds:
         self.telemetry = TelemetryStore()
         session_dir = None
         path = (meta or {}).get("path")
-        if path:
+        if (meta or {}).get("radio_dir"):  # live / followed recording: a folder next to the file
+            session_dir = Path(meta["radio_dir"])
+            latency_s = 0.0  # a transcript counts when its file exists: live latency is real latency
+        elif path:
             from .config import raw_dir
 
             session_dir = raw_dir() / str(path).rstrip("/")

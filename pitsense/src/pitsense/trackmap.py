@@ -16,7 +16,7 @@ line crossing: within about a second of the true line (a car covers 50-80 m per 
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -170,6 +170,67 @@ def track_asof(circuit_key: int, before_utc: datetime, root: Path | None = None)
         if end < before_utc and (best is None or end > datetime.fromisoformat(best["end_utc"])):
             best = d
     return best
+
+
+def session_circuit(info: dict | None) -> tuple[int, datetime] | None:
+    """(circuit key, session start UTC) from a live SessionInfo message, or None if it lacks either.
+
+    SessionInfo is published before the session and names the circuit
+    (``Meeting.Circuit.Key``) and the scheduled start (local ``StartDate`` + ``GmtOffset``).
+    """
+    try:
+        key = int(info["Meeting"]["Circuit"]["Key"])
+        local = datetime.fromisoformat(info["StartDate"])
+        sign = -1 if str(info.get("GmtOffset", "")).startswith("-") else 1
+        h, m, sec = (int(x) for x in str(info.get("GmtOffset") or "0:0:0").lstrip("-+").split(":"))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return key, (local - timedelta(hours=h, minutes=m, seconds=sec) * sign).replace(tzinfo=timezone.utc)
+
+
+def live_outline(state, *, min_laps: int = 2) -> dict | None:
+    """Provisional outline from the cars' own published positions once ``min_laps`` laps are done.
+
+    As-of: only ``state.feeds.telemetry`` (what has been published) and the laps already completed.
+    Takes the quickest clean lap (green, no pit) among the first completed laps, finds the closed
+    loop in that car's position samples around the lap's end, and resamples it like
+    :func:`build_outline`. No pit lane. None until a usable lap exists.
+    """
+    tel = state.feeds.telemetry
+    laps = sorted((l for l in state.laps if l.lap_time and l.lap > 1 and not l.is_in_lap and not l.is_out_lap
+                   and l.track_status == "1" and l.driver in tel._pos), key=lambda l: l.lap_time)
+    if len({l.lap for l in state.laps}) < min_laps:
+        return None
+    for lap in laps[:12]:
+        h = tel.position_history(lap.driver, None)
+        ok = (h["on_track"] > 0) & np.isfinite(h["x"]) & np.isfinite(h["y"])
+        utc, xy = h["utc"][ok], np.column_stack([h["x"][ok], h["y"][ok]])
+        if len(utc) < MIN_SAMPLES:
+            continue
+        end_utc = lap.t_end + float(np.median(h["utc"] - h["t"]))  # session clock -> measured clock
+        i0 = int(np.searchsorted(utc, end_utc - lap.lap_time - 4.0))
+        i1 = int(np.searchsorted(utc, end_utc + 4.0))
+        best = None
+        for i in range(i0, min(i1, len(utc))):
+            js = np.nonzero((utc >= utc[i] + 0.9 * lap.lap_time) & (utc <= utc[i] + 1.1 * lap.lap_time))[0]
+            if not len(js):
+                continue
+            d = np.hypot(*(xy[js] - xy[i]).T)
+            k = int(np.argmin(d))
+            if best is None or d[k] < best[0]:
+                best = (float(d[k]), i, int(js[k]))
+        if best is None:
+            continue
+        _, i, j = best
+        loop, lu = xy[i:j + 1], utc[i:j + 1]
+        if len(loop) < MIN_SAMPLES or np.diff(lu).max() > MAX_GAP_S or best[0] > CLOSE_FRAC * _length(loop):
+            continue
+        line = _resample(loop, N_OUTLINE, closed=True)
+        heading = np.degrees(np.arctan2(*(line[3] - line[0])[::-1]))
+        return {"x": [round(float(v), 1) for v in line[:, 0]], "y": [round(float(v), 1) for v in line[:, 1]],
+                "start": {"x": round(float(line[0, 0]), 1), "y": round(float(line[0, 1]), 1), "heading_deg": round(float(heading), 1)},
+                "pit": None, "source": {"driver": lap.driver, "lap": lap.lap}, "provisional": True}
+    return None
 
 
 def add_commands(sub) -> None:
