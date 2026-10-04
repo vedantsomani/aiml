@@ -9,6 +9,9 @@ corrected a lap later.
 from __future__ import annotations
 
 import os
+
+# the pit-wall runtime would otherwise load the voice model on the first call change
+os.environ.setdefault("PITSENSE_VOICE", "off")
 from pathlib import Path
 
 import pytest
