@@ -41,8 +41,8 @@ When a neutralisation is already out, Plan B is the best alternative plan.
 **Head of strategy** (`decide`; timing rules rewritten, see "Call timing pass" below). Plan A = best plan, unless last lap's target stop lap is within `tol_keep`
 (0.05) of the best utility (hysteresis). First stop this lap: `BOX` (`PREPARE_BOX` if the pit lane is closed);
 within 2 laps: `PREPARE_BOX`; none due but a safety car would be worth >= 0.6 places: `BOX_IF_SC`; otherwise
-`STAY_OUT`. `NO_CALL` with the reason when no plan can be made: before lap 2, wet race (`race_dry` false or
-`weather__wet_running`) since only dry tyres are modelled. Confidence is the paired-future probability that
+`STAY_OUT`. `NO_CALL` with the reason when no plan can be made: before lap 2. Wet or mixed races (`race_dry` false or
+`weather__wet_running`) go to the wet engine (see "Wet and mixed races"). Confidence is the paired-future probability that
 the chosen timing beats the best alternative (0.5-0.97), scaled down 20 % for rain risk / `rain_now` /
 crossover and 15 % before lap 8. Reasons, most important first: safety car phase and its cheaper stop, closed
 pit lane, must-stop, penalty, tyre cliff, undercut threat/chance, the numbers behind the plan, rejoin position,
@@ -232,6 +232,71 @@ Azerbaijan 2026 pit-wall replay, all cars, `shadow-score --k 2` (before = `use_s
 `strategy-leakcheck` builds its pit wall without a bundle, so it does not exercise this gate; the gate reads only
 `models` values, which `pitsense leakcheck` covers through the benchmark rows.
 
+## Wet and mixed races (tuned on 2018-2024 wet races, 2025-2026 scored once)
+
+Code: `strategy/wetmodel.py` (what past wet races teach), `wetsim.py` (simulator), `wetobs.py` (field to simulator
+input), `wethead.py` (calls), benchmark `src/pitsense/bench/wetstrategy.py`
+(`python -m pitsense.bench.wetstrategy batch|report <tag> <first> <last>`). Switch: `SETTINGS["use_wet_engine"]`.
+
+**Model.** One latent state, the slick penalty `w` (a slick lap against the circuit's dry lap, ratio; the dry lap
+is `ref10`, the 10th percentile of clean green slick laps, stored by `summarize_race` for every race, circuits
+as-of). Inters run at a floor `c_I` (about 0.14 above the dry lap, fitted from laps where slicks and inters shared
+the track) that rises on a really wet track; wets are inters plus a term that turns negative when it is very
+wet; inter wear per lap by wetness. The crossover is `w = c_I`. Why this and not "inters minus slicks": inter pace
+is nearly flat from damp to dry-ish, so the gap is almost all slick pace. The weather features (rain flag run
+length, time since rain) predict `w` only weakly (the flag is up for whole races in some, off in wet ones in
+others), so the wet model is anchored on observed lap times: median clean laps by tyre class over the last 3 laps
+(slicks directly; the weather engineer's crossover delta; inter pace when clearly above the floor), with the
+weather prior only when nothing else exists. History is thin: 31 laps with slicks and inters together in all
+2018-2025 races.
+
+**Simulator.** `w` evolves per lap in 200 futures: rain starts with the hazard implied by `rain_prob_10min` and
+stops with a mean shower of 7 laps; rain laps raise `w`, dry laps lower it (rates from history, at least the
+recent trend of `w`). A plan is up to two tyre-class switches (slicks, inters, wets) at in-lap offsets 0-28,
+scored on race time with the pit-stop engineer's loss plus 3 s. While `race_dry` and the car has one dry compound
+a plan with no wet-class stop owes a dry stop; once wets are used the two-compound rule is void.
+
+**Head.** `BOX for INTERS / SLICKS / WETS` when the best plan switches this lap and beats the best later-or-never
+plan by `g_box` 10 s in 85 % of futures (held at half that for a call already made); `PREPARE_BOX` when the best
+plan switches within 2 laps and gains 3 s over staying. Reasons: "crossover reached: inters 2.1 s/lap faster", "rain
+in 10 min 70%", the saving, the stop cost, the field's tyres, the rule void. Plan B for a car on slicks while rain
+is likely (10-min probability 0.25 or more): "if rain starts, box for INTERS"; for a car on wets/inters: "if the
+track dries out, box for ...". Plans are `Plan.stops` of tyre classes (slicks as the softest compound that lasts).
+A rain flag alone on a dry race (nobody on wets, `race_dry`) never leaves the dry planner: dry-race calls are
+byte-identical to before on 3 dry races (2024 Bahrain, Austria, Hungary; `strategy_calls`-style replay,
+28 calls).
+When the engine has no model (too few wet laps before this race, or no dry reference for the circuit) or is off,
+the head falls back to the naive rain-flag rule instead of `NO_CALL`: BOX for INTERS once the flag has been up
+2 min with the car on slicks; BOX for SLICKS once it has been down 5 min, the car is on inters/wets and the
+weather engineer's crossover says slicks.
+
+**Evaluation.** Top-10 finishers of wet races (rain flag up at a lap end, or wets/inters used), calls every lap.
+Real switch = a pit stop that changes the tyre class (slicks / inters / wets), red-flag stops excluded. Recall:
+share of switches with a BOX call for the right class whose episode starts within +-2 laps of the in-lap.
+Precision: share of BOX class-switch episodes with such a real switch (an episode starts when the car's call
+changes). "naive" = BOX on the lap the rain flag flips (up while on slicks: INTERS; down while on inters/wets:
+SLICKS). Races counted: those where the wet engine had a model (races before 2022 have too little wet history).
+
+2018-2024 (tuning, 8 races, 89 real switches): head recall 0.37, precision 0.22 (F1 0.28) with the tuned
+thresholds (untuned: 0.28 / 0.13); naive 0.19 / 0.11. Grid: `g_box` {5,10,20,40,80} x `p_box` {0.7,0.85,0.95} x
+`hold` {0.5,0.7,1}; the engine beats the naive rule on both precision and recall, so it ships on.
+
+2025-2026 (scored once, 5 races with a model, 44 real switches): head recall 0.32 (14 hits), precision 0.18 (66
+false of 80 calls); naive 0.09 / 0.07 (62 calls). Per race (real / head calls / hits // naive calls / hits):
+
+| race | real | head calls | hits | naive calls | hits |
+|---|---|---|---|---|---|
+| 2025 Australian | 20 | 31 | 12 | 52 | 4 |
+| 2025 British | 13 | 29 | 2 | 10 | 0 |
+| 2025 Belgian | 10 | 10 | 0 | 0 | 0 |
+| 2026 Canadian | 1 | 0 | 0 | 0 | 0 |
+| 2026 Italian | 0 | 10 | 0 | 0 | 0 |
+| (no wet model) 2025 Miami / 2026 Dutch / 2026 Bahrain | 0 / 0 / 9 | naive fallback | | | |
+
+Honest reading: the head beats the flag rule, but most calls are early or late, and a call for a group of ten
+cars is ten false calls when the field waits. Rain onset is not predictable from the flag; the slicks' own pace only
+slows once it is already wet, and the first cars to switch decide when the crossover becomes visible.
+
 ## Speed
 
 Two focus cars on one snapshot: 0.6 s (288 futures, about 250 plans each) on this machine; per car 0.2 s once
@@ -253,7 +318,7 @@ are not in the benchmark rows).
   no `sc_ending` records among top-5 stops), and a car-level model of stops under SC.
 * `data/bench/history.json` in a checkout built before the strategy engineer lacks its stint tables: rebuild
   it (history only, about 45 s) or the strategy priors fall back to defaults and every number moves.
-* Wet and mixed races produce `NO_CALL`: no intermediate/wet tyre model and no crossover plans.
+* Wet races: the wet engine is plans on time, not position (no rivals, no traffic, no safety cars); recall 0.3 / precision 0.2 on the switch calls is weak (see "Wet and mixed races").
 * One safety car and one VSC at most per simulated future; red flags are treated like a safety car.
 * Lapped cars and blue flags are ignored; a car in the pit lane now is treated as on its old tyres.
 * The calls refresh per lap, so a mid-lap change in gaps is not seen until the next lap or status change.
