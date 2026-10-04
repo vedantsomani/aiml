@@ -50,7 +50,7 @@ BEST_MODEL: dict[str, str] = {
     "tyre_cliff_3": "cliff_gbm",
     "fresh_tyre_pace": "fresh_gbm",
     "pit_loss": "pitstop_loss",
-    "laps_to_stop": "survival_gbm",
+    "laps_to_stop": "survival_hz",
 }
 
 _SCORERS = {"binary": binary_scores, "position": position_scores, "regression": regression_scores}

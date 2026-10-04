@@ -97,19 +97,36 @@ class SurvivalGBM:
     params = dict(max_iter=200, learning_rate=0.06, max_leaf_nodes=15, min_samples_leaf=400, l2_regularization=10.0,
                   random_state=0)
     thin = 2  # train on every ``thin``-th lap (a car's consecutive rows are strongly correlated)
+    half_life_years = 3.0  # weight a training race by 0.5 ** (age / half_life) relative to the latest training race
+    all_engineer_keys = False  # True: every numeric "<engineer>__<key>" column (slower, and drifts: over-predicts)
+    # undeclared engineer values that carry timing information (rivals' stop probabilities, pit-stop margins)
+    extra = ("rivals__pit_prob_1", "rivals__pit_prob_3", "rivals__pit_prob_5", "rivals__ratio", "rivals__undercut_threat",
+             "rivals__undercut_chance", "rivals__typical_stint_laps", "rivals__in_pit_window", "rivals__stuck",
+             "pitstop__loss_now", "pitstop__passers_expected", "pitstop__margin_s", "pitstop__rejoin_delta")
+
+    def _columns(self, df: pd.DataFrame) -> list[str]:
+        cols = feature_columns() + [c for c in self.extra if c in df.columns]
+        if self.all_engineer_keys:
+            cols = cols + sorted(c for c in df.columns if "__" in c and c not in cols and not c.startswith("weather__")
+                                 and (pd.api.types.is_bool_dtype(df[c]) or pd.api.types.is_numeric_dtype(df[c])))
+        return cols
 
     def fit(self, df: pd.DataFrame, target: str = "y_stop_obs") -> "SurvivalGBM":
-        self.cols = feature_columns()
+        self.cols = self._columns(df)
         d = df[df["lap"] % self.thin == 0] if self.thin > 1 else df
         obs = d["y_stop_obs"].to_numpy(float)
         ev = d["y_stop_event"].to_numpy(int)
         n_at = np.minimum(obs, H).astype(int)  # records per row: the laps it was observed, at most H
         rows = np.repeat(np.arange(len(d)), n_at)
         h = np.concatenate([np.arange(1, m + 1) for m in n_at]) if n_at.sum() else np.array([], int)
+        w = None
+        if self.half_life_years:
+            age = (d["start_utc"].max() - d["start_utc"]).dt.days.to_numpy(float) / 365.25
+            w = (0.5 ** (age / self.half_life_years))[rows]
         y = ((h == obs[rows]) & (ev[rows] == 1)).astype(np.int8)
         X = _stack_x(_num(d, self.cols).to_numpy(), self.cols, h, rows)
         X[:, np.isnan(X).all(axis=0)] = 0.0  # a column that is missing everywhere (tiny training sets) breaks the binning
-        self.model = HistGradientBoostingClassifier(**self.params).fit(X, y)
+        self.model = HistGradientBoostingClassifier(**self.params).fit(X, y, sample_weight=w)
         return self
 
     def hazards(self, df: pd.DataFrame) -> np.ndarray:
@@ -122,6 +139,39 @@ class SurvivalGBM:
         return cdf_from_hazard(self.hazards(df), _left(df))
 
     predict = predict_cdf  # what the model bundle calls: the [n, 15] CDF
+
+
+class SurvivalPerHorizon(SurvivalGBM):
+    """Discrete-time survival with one boosted hazard model per horizon h = 1..15, each fit on the cars still at
+    risk at h (observed for h laps without a stop earlier) with the label "stops exactly at h". Same hazards as
+    the stacked table, but each horizon keeps its own base rate (the pooled model over-predicts short horizons)."""
+
+    name = "survival_hz"
+    params = dict(max_iter=150, learning_rate=0.05, max_leaf_nodes=12, min_samples_leaf=300, l2_regularization=10.0,
+                  random_state=0)
+    thin = 1
+    extra = ()  # the declared bench features only: the rivals' / pit-stop extras did not help on 2025 and made it over-predict
+
+    def fit(self, df: pd.DataFrame, target: str = "y_stop_obs") -> "SurvivalPerHorizon":
+        self.cols = self._columns(df)
+        d = df[df["lap"] % self.thin == 0] if self.thin > 1 else df
+        X = _num(d, self.cols).to_numpy()
+        X[:, np.isnan(X).all(axis=0)] = 0.0
+        obs, ev = d["y_stop_obs"].to_numpy(float), d["y_stop_event"].to_numpy(int)
+        w = None
+        if self.half_life_years:
+            w = 0.5 ** ((d["start_utc"].max() - d["start_utc"]).dt.days.to_numpy(float) / 365.25 / self.half_life_years)
+        self.models = []
+        for h in HORIZONS:
+            at = obs >= h
+            y = ((obs == h) & (ev == 1))[at].astype(np.int8)
+            self.models.append(HistGradientBoostingClassifier(**self.params).fit(
+                X[at], y, sample_weight=None if w is None else w[at]))
+        return self
+
+    def hazards(self, df: pd.DataFrame) -> np.ndarray:
+        X = _num(df, self.cols).to_numpy()
+        return np.column_stack([m.predict_proba(X)[:, 1] for m in self.models])
 
 
 class BaseHazard:
@@ -196,7 +246,7 @@ class RivalsHazard:
     predict = predict_cdf
 
 
-MODELS = (BaseHazard, GeoGBMHazard1, GeoGBMHazard, RivalsHazard, SurvivalGBM)
+MODELS = (BaseHazard, GeoGBMHazard1, GeoGBMHazard, RivalsHazard, SurvivalPerHorizon)
 
 
 # ----------------------------------------------------------------------------- scores
@@ -305,7 +355,7 @@ def evaluate(df: pd.DataFrame, *, test_year: int, min_train_races: int):
         for key, v in summarize(C[n]).items():
             out[f"{n}__{key}"] = v
     cal = {n: pd.concat([calibration_k(T, C[n], k).assign(k=k) for k in (1, 3, 5)]).assign(bin=lambda x: x["bin"].astype(str))
-           for n in ("survival_gbm", "rivals_hazard")}
+           for n in ("survival_hz", "rivals_hazard")}
     return EvalResult("laps_to_stop", board, per, out, cal)
 
 
