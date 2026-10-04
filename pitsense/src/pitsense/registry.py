@@ -23,6 +23,7 @@ ENGINEERS: list[str] = [
     "pitsense.pitwall.engineers.mechanic_chief:MechanicChief",
     "pitsense.pitwall.engineers.tyresets:TyreSetsEngineer",
     "pitsense.pitwall.engineers.quali:QualiEngineer",
+    "pitsense.pitwall.engineers.safetycar:SafetyCarEngineer",
     "pitsense.pitwall.engineers.models:ModelsEngineer",
     "pitsense.pitwall.engineers.strategy:StrategyEngineer",
     "pitsense.pitwall.engineers.head:HeadOfStrategy",
@@ -35,6 +36,7 @@ TASKS: list[str] = [
     "pitsense.bench.pitstop:pitstop_tasks",
     "pitsense.bench.rivals:rivals_tasks",
     "pitsense.bench.weather:weather_tasks",
+    "pitsense.bench.safetycar:sc_tasks",
     "pitsense.bench.strategy:strategy_tasks",
 ]
 
@@ -54,6 +56,7 @@ LABELERS: list[str] = [
     "pitsense.bench.pitstop:pitstop_labels",
     "pitsense.bench.rivals:rivals_labels",
     "pitsense.bench.weather:weather_labels",
+    "pitsense.bench.safetycar:safetycar_labels",
 ]
 
 # CLI extensions: f(subparsers) -> None, adding `pitsense <command>` parsers (cli.py).
@@ -64,6 +67,7 @@ COMMANDS: list[str] = [
     "pitsense.modelstore:add_commands",
     "pitsense.pitwall.runtime:add_commands",
     "pitsense.bench.weather:add_commands",
+    "pitsense.bench.safetycar:add_commands",
     "pitsense.bench.strategy:add_commands",
     "pitsense.voice.cli:add_commands",
     "pitsense.trackmap:add_commands",
