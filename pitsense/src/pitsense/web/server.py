@@ -5,8 +5,9 @@
     GET /api/calls         {"current": [...], "log": [...]}
     GET /api/alerts        {"active": [...], "log": [...]}
     GET /api/health        loop status, throughput, snapshot latency, model bundle
-    GET /api/stream        server-sent events: "snapshot" (the snapshot JSON), "status"
-    GET /api/radio.wav     ?car=N: that car's latest radio message, spoken (Piper TTS; 404 if not installed)
+    GET /api/stream        server-sent events: "snapshot" (the snapshot JSON), "pos" (car positions, ~3 Hz), "status"
+    GET /api/radio.wav     ?car=N[&i=ID]: our pit wall's message (latest, or by id), spoken (Piper TTS; 404 if not installed)
+    GET /api/teamradio     ?car=N&i=K: the K-th real driver radio mp3 of car N (published clips only, audio/mpeg)
 
 Read-only: no endpoint changes anything. Binds to 127.0.0.1 unless told otherwise.
 """
@@ -47,10 +48,13 @@ def _handler(rt):
         def _radio(self) -> None:
             from urllib.parse import parse_qs
 
-            car = (parse_qs(self.path.partition("?")[2]).get("car") or [""])[0]
-            msg = getattr(rt, "radio", {}).get(car)
-            if not msg:
+            q = parse_qs(self.path.partition("?")[2])
+            car = (q.get("car") or [""])[0]
+            mid = (q.get("i") or [""])[0]
+            text = rt.wall_text(car, int(mid) if mid.isdigit() else None)
+            if not text:
                 return self._json({"error": "no radio message for this car"}, 404)
+            msg = {"text": text}
             try:
                 from ..voice import tts
 
@@ -60,6 +64,17 @@ def _handler(rt):
             except Exception as exc:
                 return self._json({"error": f"speech failed: {exc}"}, 500)
             self._send(wav.read_bytes(), "audio/wav")
+
+        def _teamradio(self) -> None:
+            from urllib.parse import parse_qs
+
+            q = parse_qs(self.path.partition("?")[2])
+            car = (q.get("car") or [""])[0]
+            i = (q.get("i") or [""])[0]
+            f = rt.team_radio_file(car, int(i)) if i.isdigit() and len(i) <= 5 else None
+            if f is None:
+                return self._json({"error": "no such radio clip"}, 404)
+            self._send(f.read_bytes(), "audio/mpeg")
 
         def do_GET(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
@@ -79,6 +94,8 @@ def _handler(rt):
                     self._stream()
                 elif path == "/api/radio.wav":
                     self._radio()
+                elif path == "/api/teamradio":
+                    self._teamradio()
                 else:
                     self._json({"error": "not found"}, 404)
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -107,8 +124,8 @@ def _handler(rt):
                             idle = 0
                         continue
                     idle = 0
-                    if msg["event"] == "snapshot":
-                        self.wfile.write(b"event: snapshot\ndata: " + msg["data"] + b"\n\n")
+                    if msg["event"] in ("snapshot", "pos"):
+                        self.wfile.write(b"event: " + msg["event"].encode() + b"\ndata: " + msg["data"] + b"\n\n")
                     else:
                         self.wfile.write(b"event: status\ndata: " + json.dumps(msg).encode() + b"\n\n")
                     self.wfile.flush()

@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import events as _events  # the feeder: reads the log; exempt by name in tests/test_pitwall.py
+from ..config import FEED_TOPICS
 from ..state import RaceState
 from .types import Snapshot, TeamConfig
 
@@ -40,6 +41,11 @@ PUBLISH_EVERY_S = 3.0  # session seconds between snapshots (wall seconds at 1x)
 MAX_SPEED_TICK_S = 30.0  # snapshot spacing when replaying as fast as possible
 LEAD_IN_S = 60.0  # replay starts pacing this long before the session start
 LOG_KEEP = 500  # calls and alerts kept in memory for the API
+POS_EVERY_S = 0.5  # session seconds between car positions
+POS_MIN_WALL_S = 0.3  # ...and never faster than ~3 Hz on the wall clock (high replay speeds)
+RADIO_EVERY_WALL_S = 1.0  # how often the team-radio list is rebuilt
+RADIO_KEEP = 80  # driver radio messages in the snapshot
+WALL_KEEP = 120  # pit-wall conversation entries (voice calls and alerts) in the snapshot
 
 
 # ----------------------------------------------------------------------------- sources
@@ -103,7 +109,7 @@ class FollowSource(Source):
         from ..live import RecordingTail
 
         self.path, self.follow, self.poll_s, self.idle_exit_s = Path(path), follow, poll_s, idle_exit_s
-        self.tail = RecordingTail(self.path)
+        self.tail = RecordingTail(self.path, feeds=True)
         self.title = self.path.name
         self.meta = {"source": str(self.path)}
         self.speed = 1.0
@@ -205,7 +211,7 @@ class PitWallRuntime:
 
     def __init__(self, source: Source, *, team: TeamConfig | None = None, log_dir: Path | None = None,
                  models: bool | object = True, history=None, publish_every_s: float | None = None,
-                 engineers=None) -> None:
+                 engineers=None, track: dict | None = None) -> None:
         self.source = source
         self.team = team or TeamConfig()
         self.log_dir = Path(log_dir) if log_dir else None
@@ -243,6 +249,17 @@ class PitWallRuntime:
         self._last_pub_lap = -1
         self._last_calls: dict[str, tuple] = {}
         self.radio: dict[str, dict] = {}  # car -> latest radio message from the voice
+        self.wall_msgs: deque = deque(maxlen=WALL_KEEP)  # pit-wall conversation: voice calls and alerts
+        self._wall_id = 0
+        self.track: dict | None = track
+        self._track_done = track is not None
+        self._pos_t: float | None = None
+        self._pos_wall = 0.0
+        self.positions: dict = {}
+        self._radio_lap: dict[str, int] = {}  # mp3 path -> leader lap when it was published
+        self._radio_list: list[dict] = []
+        self._radio_wall = 0.0
+        self._radio_sig: tuple = ()
         self.voice = None if os.environ.get("PITSENSE_VOICE", "") != "off" else False  # loaded on first call
         self._seen_alerts: set[tuple] = set()
         self._wall_t0 = time.time()
@@ -334,6 +351,12 @@ class PitWallRuntime:
         state.apply(e)
         self.n_events += 1
         self.last_event_wall = time.time()
+        if e.topic in FEED_TOPICS:  # feeds never change the timing state: no engineers, no snapshot
+            if e.topic == "TeamRadio":
+                self._note_radio_laps()
+            if e.topic == "Position.z":
+                self._maybe_push_positions()
+            return
         if e.topic == "TimingData":
             if not self._feed_positions and feed_has_positions(e.data):
                 self._feed_positions, self.inferred_order = True, False
@@ -367,6 +390,7 @@ class PitWallRuntime:
         d["extra"] = self._extra(state)
         self._log_changes(state, d, snap)
         d["extra"]["radio"] = dict(self.radio)
+        d["extra"].update(self._feed_extra(state))
         payload = _json_bytes(d)
         ms = (time.perf_counter() - t0) * 1000
         self.snap_ms.append(ms)
@@ -376,6 +400,79 @@ class PitWallRuntime:
             self.latest, self.latest_bytes = d, payload
         self._notify({"event": "snapshot", "data": payload})
         return d
+
+    # --------------------------------------------------------------- positions, track, team radio
+    def _find_track(self) -> None:
+        """The circuit outline known before this race (``trackmap.track_asof``); once per session."""
+        self._track_done = True
+        ref, start = self.source.ref, self.source.start_utc
+        if ref is None or start is None:
+            return
+        try:
+            from ..trackmap import track_asof
+
+            t = track_asof(ref.circuit_key, start)
+        except Exception:
+            log.exception("track outline failed")
+            return
+        if t:
+            self.track = {k: t.get(k) for k in ("x", "y", "start", "pit")} | {"key": f"{ref.circuit_key}:{t.get('end_utc')}"}
+
+    def _positions(self) -> dict:
+        """Newest published position of every car: {car: [x, y, on_track]} (as-of the feed clock)."""
+        try:
+            raw = self.state.feeds.telemetry.latest_position()
+        except Exception:
+            return {}
+        return {c: [round(p["x"]), round(p["y"]), 1 if p["on_track"] else 0] for c, p in raw.items()
+                if p["x"] == p["x"] and p["y"] == p["y"]}
+
+    def _note_radio_laps(self) -> None:
+        for m in self.state.feeds.radio.messages(last_s=1.0):
+            self._radio_lap.setdefault(m.path, self.state.current_lap)
+
+    def _team_radio(self, force: bool = False) -> list[dict]:
+        """Latest driver radio messages (real clips only). Text is None until the transcript is known."""
+        now = time.monotonic()
+        if not force and now - self._radio_wall < RADIO_EVERY_WALL_S:
+            return self._radio_list
+        self._radio_wall = now
+        store = self.state.feeds.radio
+        tla = {n: d.tla for n, d in self.state.drivers.items()}
+        idx: dict[str, int] = {}
+        out = []
+        for m in store.messages():
+            i = idx[m.car] = idx.get(m.car, -1) + 1  # index among that car's messages (see team_radio_file)
+            lap = self._radio_lap.setdefault(m.path, self.state.current_lap)
+            out.append({"id": f"{m.car}:{i}", "car": m.car, "tla": tla.get(m.car), "t": round(m.t, 1), "lap": lap,
+                        "text": m.text or None, "audio": f"/api/teamradio?car={m.car}&i={i}" if m.audio else None})
+        self._radio_list = out[-RADIO_KEEP:]
+        return self._radio_list
+
+    def _feed_extra(self, state: RaceState) -> dict:
+        if not self._track_done and self.source.start_utc is not None:
+            self._find_track()
+        self.positions = self._positions()
+        self._pos_t = state.t
+        return {"positions": {"t": round(state.t, 1), "cars": self.positions},
+                "track": self.track, "team_radio": self._team_radio(True),
+                "wall_msgs": list(self.wall_msgs)}
+
+    def _maybe_push_positions(self) -> None:
+        """A light "pos" event: car positions (and radio changes) between snapshots, about 3 Hz on the wall clock."""
+        state, now = self.state, time.monotonic()
+        if self._pos_t is not None and (state.t - self._pos_t < POS_EVERY_S or now - self._pos_wall < POS_MIN_WALL_S):
+            return
+        self._pos_t, self._pos_wall = state.t, now
+        self.positions = pos = self._positions()
+        if not pos:
+            return
+        msg = {"t": round(state.t, 1), "speed": self.source.speed, "cars": pos}
+        radio = self._team_radio()
+        sig = (len(radio), sum(1 for r in radio if r["text"]))
+        if sig != self._radio_sig:
+            self._radio_sig, msg["team_radio"] = sig, radio
+        self._notify({"event": "pos", "data": _json_bytes(msg)})
 
     def _extra(self, state: RaceState) -> dict:
         rc = [{"t": round(m.t, 1), "message": m.message, "category": m.category}
@@ -425,7 +522,10 @@ class PitWallRuntime:
             radio = self._say(snap, c["car"]) if snap is not None else None
             if radio:
                 rec["radio"] = radio
-                self.radio[c["car"]] = {"text": radio, "lap": state.current_lap, "action": c["action"]}
+                self._wall_id += 1
+                self.radio[c["car"]] = {"text": radio, "lap": state.current_lap, "action": c["action"], "id": self._wall_id}
+                self.wall_msgs.append({"id": self._wall_id, "kind": "voice", "car": c["car"], "t": round(state.t, 1),
+                                       "lap": state.current_lap, "text": radio, "action": c["action"]})
             self._record(rec, self.calls_log)
         for a in d["alerts"]:
             key = (a["engineer"], a["code"], a.get("car"), a.get("since"))
@@ -433,6 +533,10 @@ class PitWallRuntime:
                 continue
             self._seen_alerts.add(key)
             self._record({"kind": "alert", "wall": wall, "lap": state.current_lap, **a}, self.alerts_log)
+            self._wall_id += 1
+            self.wall_msgs.append({"id": self._wall_id, "kind": "alert", "car": a.get("car"), "t": round(state.t, 1),
+                                   "lap": state.current_lap, "text": a.get("message"), "engineer": a.get("engineer"),
+                                   "severity": a.get("severity")})
 
     def _record(self, rec: dict, mem: deque) -> None:
         mem.append(rec)
@@ -483,6 +587,36 @@ class PitWallRuntime:
             "call_log": str(self.log_path) if self.log_path else None,
             "recorder_error": getattr(self.source, "recorder_error", None),
         }
+
+    def team_radio_file(self, car: str, i: int) -> Path | None:
+        """The mp3 of a driver's i-th published radio message, or None. Only files inside the session's
+        TeamRadio folder are ever returned; ``car`` and ``i`` come from the browser and are validated."""
+        if not (isinstance(car, str) and car.isdigit() and len(car) <= 3 and isinstance(i, int) and i >= 0):
+            return None
+        store = self.state.feeds.radio
+        base = store.transcripts.dir
+        if base is None:
+            return None
+        msgs = store.messages(car)  # published only: a clip is not served before it exists
+        if i >= len(msgs) or not msgs[i].audio:
+            return None
+        try:
+            root = (Path(base) / "TeamRadio").resolve()
+            f = Path(msgs[i].audio).resolve()
+            f.relative_to(root)
+        except (ValueError, OSError):
+            return None
+        return f if f.suffix.lower() == ".mp3" and f.is_file() else None
+
+    def wall_text(self, car: str, msg_id: int | None = None) -> str | None:
+        """Text of one of our own pit-wall voice messages (by id), else the car's latest."""
+        if msg_id is not None:
+            for m in self.wall_msgs:
+                if m["id"] == msg_id and m["kind"] == "voice" and m["car"] == car:
+                    return m["text"]
+            return None
+        r = self.radio.get(car)
+        return r["text"] if r else None
 
     def calls(self) -> dict:
         with self.lock:
@@ -574,14 +708,20 @@ def build_source(a) -> Source:
     if a.file:  # a finished recording: replay it at --speed
         from ..live import load_recording
 
-        return ReplaySource(load_recording(Path(a.file)), a.speed, title=Path(a.file).name)
+        return ReplaySource(load_recording(Path(a.file), feeds=True), a.speed, title=Path(a.file).name)
     if not a.race:
         raise SystemExit("give --race (archive replay), --file (a recording) or --live")
     from .. import archive
     ref = archive.find_session(a.year, a.race, "Sprint" if a.sprint else "Race")
     if not (ref.local_dir / "TimingData.jsonStream").exists():
         archive.download_session(ref)
-    return ReplaySource(_events.load_archive_session(ref.local_dir), a.speed, ref=ref)
+    return ReplaySource(load_with_feeds(ref.local_dir), a.speed, ref=ref)
+
+
+def load_with_feeds(session_dir: Path) -> _events.EventLog:
+    """Timing, positions and radio (not CarData: the dashboard does not use telemetry channels)."""
+    files = Path(session_dir).glob("*.jsonStream")
+    return _events.load_archive_session(session_dir, tuple(f.stem for f in files if f.stem != "CarData.z"))
 
 
 def cmd_pitwall(a) -> None:
