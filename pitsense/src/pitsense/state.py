@@ -234,6 +234,7 @@ class RaceState:
     def apply(self, e: Event) -> None:
         self.t = e.t
         self.new_laps = []
+        self.feeds.advance(e.t)
         if e.topic in FEED_TOPICS:  # telemetry, positions, radio: kept apart from the timing state
             self.feeds.apply(e)
             return

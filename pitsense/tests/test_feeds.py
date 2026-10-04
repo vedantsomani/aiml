@@ -155,3 +155,12 @@ def test_track_asof_uses_only_finished_races(tmp_path):
     assert trackmap.track_asof(7, UTC0, tmp_path)["race_id"] == "b"
     assert trackmap.track_asof(7, UTC0 - timedelta(days=500), tmp_path) is None
     assert trackmap.track_asof(8, UTC0, tmp_path) is None
+
+
+def test_state_clock_drives_default_queries_and_transcript_latency(tmp_path):
+    st = RaceState({"path": "x"})
+    st.feeds.radio.latency_s = 15.0
+    st.apply(Event(10.0, "TeamRadio", {"Captures": [{"Utc": utc(1), "RacingNumber": "1", "Path": "TeamRadio/a.mp3"}]}, 0))
+    st.apply(Event(20.0, "SessionStatus", {"Status": "Started"}, 1))
+    assert st.feeds.radio.messages("1")[0].text is None  # 10 s after the message: not known yet
+    assert st.feeds.radio.messages("1")[0].known_at == 25.0

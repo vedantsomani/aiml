@@ -265,6 +265,13 @@ class Feeds:
             session_dir = raw_dir() / str(path).rstrip("/")
         self.radio = RadioStore(session_dir, latency_s)
 
+    def advance(self, t: float) -> None:
+        """Move both stores' clocks to the race state's time (any event), so default queries mean 'now'."""
+        if t > self.telemetry.now:
+            self.telemetry.now = t
+        if t > self.radio.now:
+            self.radio.now = t
+
     def apply(self, e: Event) -> None:
         data: Any = e.data
         if isinstance(data, str):
