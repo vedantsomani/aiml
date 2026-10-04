@@ -195,6 +195,43 @@ PREPARE_BOX 12/49 / 12/45, box precision 0.456 / 0.480, STAY_OUT 0.964 / 0.964, 
 Conclusion: PREPARE_BOX is not trustworthy yet (about 0.25 on the full field, 0.4-0.5 on top 5). The pit-probability
 signal does not separate "stop in 1-2 laps" from "stop in 4-8 laps"; a better timing model is needed, not tighter gates.
 
+## Stop-timing gate (laps-to-stop model; tuned on 2025, 2026 scored once)
+
+The PREPARE_BOX audit said pit probabilities cannot tell a stop 1-2 laps away from one 4-8 laps away. The models
+bundle now carries a laps-to-stop distribution (`docs/models.md`, `p_stop_le_1/2/3/5/8`). With a bundle,
+`decide` gates on it (`SETTINGS["use_stop_dist"]`, `analysis.CarAnalysis.ps`; without a bundle the earlier rule
+runs unchanged, and the simulator's inputs are untouched):
+
+* BOX: plan gain within `tol_box` and `p_stop_le_1 >= q1_box` (0.20).
+* PREPARE_BOX: gain within `tol_prep` for a stop within `prep_laps` and `p_stop_le_2 >= q2_prep` (0.12) and
+  `p_stop_le_1 >= q1_prep` (0.10). Calls already made are held at x0.7 as before.
+
+Chosen on 2025 by `replay_calls` on the recorded trace (grid of 288 + 640 settings; the plateau around
+q1_box 0.15-0.25, q1_prep 0.10, tol_prep 0.5, tol_box 0.3 is flat, `q2_prep` hardly matters below 0.25: the
+one-lap probability does the work). Top 5, +-2 laps, same trace and inputs for before and after:
+
+| | BOX | PREPARE_BOX | box+prep precision | recall | STAY_OUT right |
+|---|---|---|---|---|---|
+| 2025 before | 30/59 = 0.51 | 69/141 = 0.49 | 0.495 | 0.349 | 0.966 |
+| 2025 after (tuned) | 32/54 = 0.59 | 60/112 = 0.54 | 0.554 | 0.335 | 0.951 |
+| 2026 before | 11/20 = 0.55 | 31/80 = 0.39 | 0.420 | 0.266 | 0.959 |
+| 2026 after (scored once) | 18/31 = 0.58 | 30/58 = 0.52 | 0.539 | 0.281 | 0.958 |
+
+PREPARE_BOX precision on 2026 rises from 0.39 to 0.52 and recall does not fall (0.266 to 0.281); on 2025 it costs
+1.4 points of recall for 5 of precision. Still not "well above" 0.5 on the top 5: a stop 1-2 laps ahead is only
+partly visible in the feed (window accuracy of the median forecast is 0.28).
+
+Azerbaijan 2026 pit-wall replay, all cars, `shadow-score --k 2` (before = `use_stop_dist` off):
+
+| | BOX | PREPARE_BOX | box precision | STAY_OUT right | recall | calls logged |
+|---|---|---|---|---|---|---|
+| before | 24/30 | 12/45 | 0.480 | 0.964 | 0.526 | 145 |
+| after | 23/30 | 11/24 | 0.630 | 0.979 | 0.526 | 116 |
+
+(`pitsense pitwall` keeps serving after the replay ends; stop the process once the log says "race is over".)
+`strategy-leakcheck` builds its pit wall without a bundle, so it does not exercise this gate; the gate reads only
+`models` values, which `pitsense leakcheck` covers through the benchmark rows.
+
 ## Speed
 
 Two focus cars on one snapshot: 0.6 s (288 futures, about 250 plans each) on this machine; per car 0.2 s once
