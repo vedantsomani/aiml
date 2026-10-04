@@ -80,7 +80,9 @@ def test_engineer_fills_keys_only_with_a_bundle(race_log):
             state.apply(e)
             wall.observe(state)
         vals = [wall.view(state).car("models", n) for n in state.drivers]
-        assert all(set(v) == {"pit_prob_1", "pit_prob_3", "rejoin_pred"} for v in vals)
+        from pitsense.pitwall.engineers.models import KEYS
+
+        assert all(set(v) == set(KEYS) and {"pit_prob_1", "pit_prob_3", "rejoin_pred", "p_stop_le_2", "laps_to_stop_med"} <= set(v) for v in vals)
         assert any(v["pit_prob_3"] is not None for v in vals) == expect
         if expect:
             assert {v["pit_prob_1"] for v in vals if v["pit_prob_1"] is not None} == {0.25}
