@@ -474,6 +474,7 @@ def analyse(state, view, ctx, memory, cars: list[str], *, S: int | None = None, 
     out: dict[str, CarAnalysis] = {}
     rules_r, weather_r = view.race("rules"), view.race("weather")
     wet = not bool(rules_r.get("race_dry", True)) or bool(weather_r.get("wet_running"))
+    wet_now = bool(weather_r.get("wet_running")) or (weather_r.get("rainfall") or 0) > 0
     wm = wetobs.model_for(ctx)
     by_anchor: dict[int, list[str]] = {}
     for n in cars:
@@ -491,9 +492,11 @@ def analyse(state, view, ctx, memory, cars: list[str], *, S: int | None = None, 
                     out[n] = a
                     continue
                 # rain flag up but the slicks run at dry pace: the dry planner stays in charge
-            else:
+            elif wet_now or d.compound in ("INTERMEDIATE", "WET"):
                 out[n] = CarAnalysis(n, False, "wet conditions: no wet-tyre model yet (too few wet laps in past races or no dry lap time for this circuit)")
                 continue
+            # race_dry is off for good once anyone fitted inters, but the track has dried and this car is on
+            # slicks: the dry planner is in charge again (a wet start must not mute the rest of the race)
         by_anchor.setdefault(d.laps, []).append(n)
     for A, group in sorted(by_anchor.items()):
         t0 = time.perf_counter()
