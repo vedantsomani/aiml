@@ -48,6 +48,28 @@ as approximate around pit stops. `state.py` is untouched: the order is set by th
 `--team 16,44` takes car numbers. With no team, click any car in the tower to pin it; pins are
 remembered in the browser.
 
+Each browser can also choose its own team: the selector in the header (saved in that browser's
+localStorage, "no team" = pins only). It only changes what that screen highlights and asks about; the
+server's `--team` is just the default and nothing on the server changes, so a driver coach, a strategist
+and a phone can each follow a different car.
+
+## 4b. Phone, tablet and several viewers
+
+- Phone (under 700 px): one section at a time, switched by the tab bar at the bottom (Tower, Map,
+  Radio, Team, Alerts); a sticky banner under the header shows the current call of your cars on every
+  tab; buttons are 44 px or more; hold the big microphone button to talk (works with touch, no long-press
+  menu). Less important tower columns are hidden; there is no horizontal scroll at 360 px.
+- Tablet (700-1100 px): two columns. Desktop: as before.
+- Open it on a phone: start with `pitsense pitwall --race hungary --speed 20 --team ferrari --host 0.0.0.0 --token pick-a-word`.
+  It prints `On the same Wi-Fi open http://192.168.x.y:8765/?token=pick-a-word`; open that on the phone (same
+  Wi-Fi). The first load stores the token in a cookie. Without the token every page and API call (and the
+  POSTs) answers 401. The microphone needs https or localhost on most phones, so push-to-talk from a phone
+  over plain LAN http is blocked by the browser; typing a question works. Allow the port in the firewall.
+- Concurrency: every browser has its own server thread and a bounded queue (8); a slow one loses old
+  updates, a stalled one is cut after 8 s, more than 64 viewers get 503. The publishing loop never waits
+  for a browser. `/api/health` shows `"viewers": N`.
+- The token is a shared secret over plain http: fine for a home or garage network, not for the internet.
+
 ## 5. The screen
 
 Dark, high contrast, one page.
@@ -137,8 +159,8 @@ curl -N localhost:8765/api/stream
 
 A snapshot is published every 3 session seconds (scaled by speed) and on every leader lap. Timing is
 on the session clock, so the same input gives the same snapshots and call log at any speed. The server
-binds to 127.0.0.1 only unless you pass `--host`; it has no authentication, so keep it on a trusted
-network. A POST from a page on another origin is refused.
+binds to 127.0.0.1 only unless you pass `--host`; with `--token` every request needs it (see 4b),
+without it there is no authentication, so keep it on a trusted network. A POST from a page on another origin is refused.
 
 ## 6b. Ask the pit wall (text and voice)
 
