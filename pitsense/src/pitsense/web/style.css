@@ -13,8 +13,8 @@ header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;padding:10px
 .chip{padding:2px 9px;border:1px solid var(--line);border-radius:10px;color:var(--dim);font-size:12px}
 .chip.on{color:var(--green);border-color:var(--green)}.chip.off{color:var(--red);border-color:var(--red)}
 .warn{background:#3a2a00;color:var(--yellow);padding:6px 16px;border-bottom:1px solid #5a4300;font-weight:600}
-main{display:grid;grid-template-columns:minmax(0,3fr) minmax(300px,1.3fr);gap:12px;padding:12px 16px}
-@media(max-width:1000px){main{grid-template-columns:1fr}}
+main{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(380px,1fr);gap:12px;padding:10px 12px;align-items:start}
+@media(max-width:1100px){main{grid-template-columns:1fr}}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px 12px;margin-bottom:12px}
 h2{margin:0 0 8px;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
 h2 small{text-transform:none;letter-spacing:0;margin-left:8px;color:#5d6875}
@@ -53,3 +53,29 @@ td.p{font-weight:700;width:34px}
 
 .radio { margin: 6px 0; padding: 6px 8px; border-left: 3px solid #4fd1ff; background: rgba(79,209,255,0.08); color: #e8f7ff; }
 #radiobtn { margin-left: 8px; font: inherit; font-size: 11px; padding: 2px 8px; background: #1b2633; color: #cfe; border: 1px solid #3a4d63; border-radius: 4px; cursor: pointer; }
+
+.tower{overflow-x:auto}
+#radiobtn{float:right;margin:-3px 0 0}
+#mapwrap{position:relative}
+#map{display:block;width:100%;height:clamp(230px,34vh,360px);background:#0a0d11;border-radius:4px}
+.outline-bed{fill:none;stroke:#1b222b;stroke-width:12px;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+.outline{fill:none;stroke:#56616e;stroke-width:3px;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+.pitlane{fill:none;stroke:#3b6f8f;stroke-width:2px;stroke-dasharray:5 4;vector-effect:non-scaling-stroke}
+.sf{stroke:#fff;stroke-linecap:butt}
+.trail{fill:none;stroke:#3a4452;stroke-width:2px;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+.car{cursor:default}.car .dot{stroke:#05070a}.car.mine .dot{stroke:#fff}
+.car.off{opacity:.35}
+.car .tla{fill:#e8edf2;font-weight:700;paint-order:stroke;stroke:#05070a;stroke-width:3px;pointer-events:none;font-family:inherit}
+.tip{position:absolute;pointer-events:none;background:#05070aee;border:1px solid var(--line);border-radius:4px;padding:4px 8px;font-size:12px;white-space:nowrap;z-index:3}
+.dim{color:var(--dim)}
+.convo{max-height:clamp(180px,26vh,300px);overflow-y:auto;display:flex;flex-direction:column;gap:6px;padding-right:2px}
+.msg{max-width:92%}
+.msg .who{font-size:11px;color:var(--dim);margin-bottom:1px}.msg .who b{color:var(--fg)}
+.msg .when{margin-left:6px;color:#5d6875}
+.msg .bub{padding:5px 9px;border-radius:8px;background:#161c24;border:1px solid var(--line)}
+.msg .play{font:inherit;font-size:11px;margin-right:6px;padding:0 6px;background:#1b2633;color:#cfe;border:1px solid #3a4d63;border-radius:10px;cursor:pointer}
+.msg.driver{align-self:flex-start}.msg.driver .bub{border-left:3px solid #4fd1ff}
+.msg.wallmsg{align-self:flex-end;text-align:left}.msg.wallmsg .bub{background:#0c2a27;border-color:#145b52}
+.msg.alert-msg{align-self:flex-end}.msg.alert-msg .bub{background:#1c1a0c;border-color:#4a3f10;font-size:13px}
+.msg.alert-msg.critical .bub{background:#2a0e0e;border-color:#6b1d1d}
+.msg.playing .bub{box-shadow:0 0 0 2px var(--accent)}
