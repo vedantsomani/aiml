@@ -20,6 +20,8 @@ ENGINEERS: list[str] = [
     "pitsense.pitwall.engineers.mechanic_telemetry:MechanicTelemetry",
     "pitsense.pitwall.engineers.mechanic_radio:MechanicRadio",
     "pitsense.pitwall.engineers.mechanic_chief:MechanicChief",
+    "pitsense.pitwall.engineers.tyresets:TyreSetsEngineer",
+    "pitsense.pitwall.engineers.quali:QualiEngineer",
     "pitsense.pitwall.engineers.models:ModelsEngineer",
     "pitsense.pitwall.engineers.strategy:StrategyEngineer",
     "pitsense.pitwall.engineers.head:HeadOfStrategy",
@@ -64,6 +66,8 @@ COMMANDS: list[str] = [
     "pitsense.voice.cli:add_commands",
     "pitsense.trackmap:add_commands",
     "pitsense.radio:add_commands",
+    "pitsense.weekend:add_commands",
+    "pitsense.bench.quali:add_commands",
 ]
 
 

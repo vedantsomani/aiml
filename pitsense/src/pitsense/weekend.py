@@ -172,3 +172,38 @@ def used_str(sets: list[TyreSet]) -> str:
     free = [t for t in sets if not t.mounted]
     free.sort(key=lambda t: (DRY.index(t.compound), t.laps))
     return " ".join(f"{_LETTER[t.compound]}{t.laps}" for t in free)
+
+
+# --------------------------------------------------------------------------- pre-race tool
+def cmd_tyresets(a) -> None:
+    ref = archive.find_session(a.year, a.race, "Sprint" if a.sprint else "Race")
+    sessions = have_sessions(ref)
+    if not sessions:
+        raise SystemExit(f"no earlier session of {ref.meeting_name} on disk: run `pitsense fetch --weekend`")
+    ret = {}
+    for item in a.returned or []:
+        c, _, n = item.partition("=")
+        ret[{"S": "SOFT", "M": "MEDIUM", "H": "HARD"}[c.upper()]] = int(n)
+    alloc = allocation(is_sprint_weekend(ref), ret)
+    sets = weekend_sets(ref)
+    names = {}
+    from .events import load_archive_session
+
+    for e in load_archive_session(ref.local_dir, ("DriverList",)).events:
+        for n, d in (e.data or {}).items():
+            if isinstance(d, dict) and d.get("Tla"):
+                names[n] = d["Tla"]
+    print(f"{ref.slug}: sessions {', '.join(sessions)}; allocation {alloc} (assumed)")
+    print(f"{'car':<8}{'new S':>6}{'new M':>6}{'new H':>6}  used sets (laps)")
+    for car in sorted(sets, key=lambda c: int(c) if c.isdigit() else 999):
+        left = remaining(sets[car], alloc)
+        print(f"{car + ' ' + names.get(car, ''):<8}{left['SOFT']:>6}{left['MEDIUM']:>6}{left['HARD']:>6}  {used_str(sets[car])}")
+
+
+def add_commands(sub) -> None:
+    s = sub.add_parser("tyresets", help="pre-race: new and used dry sets each car has left")
+    s.add_argument("--year", type=int, default=2026)
+    s.add_argument("--race", required=True)
+    s.add_argument("--sprint", action="store_true")
+    s.add_argument("--returned", nargs="+", help="sets handed back, e.g. S=1 H=0 (not in the feed)")
+    s.set_defaults(fn=cmd_tyresets)
