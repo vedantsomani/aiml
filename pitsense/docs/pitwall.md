@@ -67,6 +67,19 @@ Dark, high contrast, one page.
   PREPARE BOX, BOX IF SC, STAY OUT; NO CALL is greyed), tyre to fit, confidence, the reasons in
   order, Plan A and Plan B (stops as lap and compound, expected position, trigger), and a line of
   tyre and rival numbers (degradation, cliff risk, undercut threat and chance).
+- **Track map (right, top).** SVG, offline. The circuit outline (`trackmap.track_asof`: built only from
+  races that finished before this one), pit lane (dashed blue), start/finish bar, and one dot per car in
+  its team colour. Your cars are larger, ringed in white, labelled with the TLA and drawn on top; hover any
+  car for its position, tyre and the gap to the car ahead and behind. Dots glide between updates. The map
+  is rotated so the long axis of the circuit is horizontal and fitted to the panel. With no outline
+  (new circuit, or a recording) it draws the trails the cars leave instead. Cars in the pits or off track fade.
+- **Pit wall radio (right, under the map).** A chat feed for the focus cars, oldest first: real driver
+  radio on the left (transcript, or "transcript pending" for the first 15 s, and a play button for the real
+  mp3), our pit wall on the right (the head-of-strategy call in the voice's words, with a play button for the
+  Piper audio) and engineer alerts for those cars (plus any critical alert). Driver speech is only ever real
+  radio. "radio on" plays new driver clips and pit-wall clips for your cars one after another, never
+  overlapping (a backlog of more than 6 drops the oldest at high replay speed); the connect-time backlog
+  is never read out.
 - **Alerts and race control (right).** Active alerts sorted critical, warn, info, each with the
   engineer that raised it; below, the latest race-control messages.
 
@@ -81,7 +94,19 @@ Today the head of strategy returns NO_CALL, so cards show NO CALL until it ships
 | `GET /api/calls` | `{"current": [...], "log": [...]}`: calls now, and every change since start (last 500) |
 | `GET /api/alerts` | `{"active": [...], "log": [...]}` |
 | `GET /api/health` | status, mode, events, snapshots, last-event age, snapshot latency (p50, max), errors, call-log path |
-| `GET /api/stream` | server-sent events: `snapshot` (the snapshot JSON) and `status` |
+| `GET /api/stream` | server-sent events: `snapshot` (the snapshot JSON), `pos` (car positions, about 3 Hz on the wall clock at any speed) and `status` |
+| `GET /api/teamradio?car=N&i=K` | the K-th real driver radio mp3 of car N (`audio/mpeg`); only published clips inside the session's `TeamRadio/` folder, anything else 404 |
+| `GET /api/radio.wav?car=N[&i=ID]` | our pit wall's voice message for car N (latest, or by `id` from `extra.wall_msgs`), spoken with Piper |
+
+Snapshot `extra` also carries: `positions` `{t, cars: {car: [x, y, on_track]}}` (1/10 m, newest published
+sample, refreshed at most every 0.5 session s), `track` `{x, y, start, pit, key}` or null (the outline,
+sent with every snapshot so a new browser has it; the page rebuilds only when `key` changes),
+`team_radio` (last 80 driver clips of the session: `id, car, tla, t, lap, text, audio`; `text` is null
+until 15 s after the message), and `wall_msgs` (last 120 pit-wall entries: voice calls and alerts with
+`id, kind, car, t, lap, text`). A `pos` event is `{t, speed, cars}` plus `team_radio` when it changed.
+Feed events (positions, radio) never run the engineers or publish snapshots, so calls are unchanged.
+All sources load feeds (archive: Position.z and TeamRadio; CarData is skipped). Recordings carry no
+session folder, so there is no mp3 or transcript for them, and no outline; live follows the same code.
 
 ```
 curl -s localhost:8765/api/snapshot | python -m json.tool | head
