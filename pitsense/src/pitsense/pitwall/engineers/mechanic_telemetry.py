@@ -199,10 +199,13 @@ class _Check:
                 self.b.add(ts, vals)
             self.t_moved = hi
 
-    def compare(self, now: float, min_cur: int = 12):
-        """(drop, z, n_cur): baseline median minus recent median, in baseline noise units."""
-        cur = self.s.between(now - WIN_S, now)
-        if len(cur) < min_cur:
+    def compare(self, now: float, min_cur: int = 12, min_span: float = 0.0):
+        """(drop, z, n_cur): baseline median minus recent median, in baseline noise units.
+
+        ``min_span``: the recent samples must cover at least this many seconds (a single corner is not a lap).
+        """
+        ts, cur = self.s.slice(now - WIN_S, now)
+        if len(cur) < min_cur or (min_span and ts[-1] - ts[0] < min_span):
             return None
         base = self.b.between(now - SPAN_S, now)
         if len(base) >= MIN_BASE:
@@ -553,7 +556,7 @@ class MechanicTelemetry(Engineer):
             ch.roll(now, frozen=any(l.active for l in tr.levels.values()))
         sc: dict[str, float | None] = {}
         # power: speed at full throttle, backed by rpm
-        p = tr.pw.compare(now)
+        p = tr.pw.compare(now, min_span=20.0)
         s_pow = None
         if p is not None:
             drop, z, n, _ = p
@@ -619,7 +622,7 @@ class MechanicTelemetry(Engineer):
             lo = max(0.6, float(base.mean()) + 0.35) if len(base) >= 100 else 0.6
             out.append(_clip01((float(sl.mean()) - lo) / 0.3))
             out.append(_clip01((float(co.mean()) - 0.5) / 0.4) * 0.9)
-        pc = tr.pc.compare(now, min_cur=30)
+        pc = tr.pc.compare(now, min_cur=60, min_span=45.0)
         if pc is not None:  # sudden pace collapse: speed against the field, all samples, 8 % down for a lap
             drop, z, n, _ = pc
             out.append(_clip01((drop - 0.04) / 0.10) * _clip01(z / 4.0))
