@@ -44,9 +44,9 @@ SETTINGS = {
     "p1_prep": 0.05,  # PREPARE_BOX also needs a stop probability this lap of at least this
     "prep_near": None,  # PREPARE_BOX also needs stopping now to cost at most this many places (None: no such condition)
     "use_stop_dist": True,  # head: time calls with the laps-to-stop distribution (models bundle) when it is there
-    "q1_box": 0.30,  # BOX needs P(stop within 1 lap) of at least this (and a plan gain within tol_box) ...
-    "q2_prep": 0.40,  # PREPARE_BOX needs P(stop within 2 laps) of at least this (and a plan gain within tol_prep)
-    "q1_prep": 0.0,  # ... and P(stop within 1 lap) of at least this
+    "q1_box": 0.20,  # BOX needs P(stop within 1 lap) of at least this (and a plan gain within tol_box) ...
+    "q2_prep": 0.12,  # PREPARE_BOX needs P(stop within 2 laps) of at least this (and a plan gain within tol_prep)
+    "q1_prep": 0.10,  # ... and P(stop within 1 lap) of at least this
     "hold": 0.7,  # a box call made last lap is held down to this share of the thresholds
     "tol_keep": 0.05,  # keep last lap's target stop lap unless the best plan is better by more than this
 }
