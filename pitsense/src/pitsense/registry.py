@@ -70,6 +70,7 @@ COMMANDS: list[str] = [
     "pitsense.radio:add_commands",
     "pitsense.weekend:add_commands",
     "pitsense.bench.quali:add_commands",
+    "pitsense.reports:add_commands",
 ]
 
 
