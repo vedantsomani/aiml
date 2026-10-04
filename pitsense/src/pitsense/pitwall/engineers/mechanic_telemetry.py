@@ -238,24 +238,32 @@ class CarTrack:
         self.n_ok = 0.0  # seconds of usable data seen
 
 
-def _positions_agree(data: dict, pos: dict) -> bool:
-    """Speed implied by consecutive positions (1/10 m) against the CarData speed. A healthy feed gives a
-    median ratio of 1.00; a frozen or scrambled one (2026 Hungary) gives ~0. Too little data counts as agreeing."""
-    u = pos["utc"]
-    if len(u) < 6:
-        return True
-    o = np.argsort(u, kind="stable")
-    u, x, y = u[o], pos["x"][o], pos["y"][o]
-    dt = np.diff(u)
-    ok = (dt > 0.05) & (dt < 2.0)
-    if ok.sum() < 6 or len(data["utc"]) < 2:
-        return True
-    vp = np.hypot(np.diff(x), np.diff(y))[ok] / 10.0 / dt[ok] * 3.6
-    vt = np.interp(u[1:][ok], data["utc"], data["speed"])
-    m = vt > 80
-    if m.sum() < 6:
-        return True
-    return 0.6 <= float(np.median(vp[m] / vt[m])) <= 1.6
+def _positions_agree(data: dict, pos: dict, u: np.ndarray) -> np.ndarray:
+    """For each CarData sample time ``u``: does the position feed around it agree with CarData?
+
+    Speed implied by consecutive positions (1/10 m) against the CarData speed. A healthy feed gives
+    a ratio of 1.00; a frozen or scrambled one (2026 Hungary after t = 4500 s) gives ~0.
+    Where there is too little to judge (slow, or few samples) the sample counts as agreeing.
+    """
+    ok_all = np.ones(len(u), bool)
+    pu = pos["utc"]
+    if len(pu) < 4 or len(data["utc"]) < 2:
+        return ok_all
+    o = np.argsort(pu, kind="stable")
+    pu, x, y = pu[o], pos["x"][o], pos["y"][o]
+    dt = np.diff(pu)
+    good = (dt > 0.05) & (dt < 2.0)
+    vp = np.hypot(np.diff(x), np.diff(y)) / 10.0 / np.maximum(dt, 1e-3) * 3.6
+    mid = 0.5 * (pu[1:] + pu[:-1])
+    vt = np.interp(mid, data["utc"], data["speed"])
+    judge = good & (vt > 80)
+    agree = np.ones(len(mid), bool)
+    r = vp[judge] / vt[judge]
+    agree[judge] = (r >= 0.5) & (r <= 1.8)
+    idx = np.clip(np.searchsorted(mid, u), 0, len(mid) - 1)
+    near = np.minimum(idx, np.maximum(idx - 1, 0))
+    # a sample is trusted only if the pairs on both sides agree (a freeze starts between two of them)
+    return agree[idx] & agree[near] & agree[np.clip(idx + 1, 0, len(mid) - 1)]
 
 
 class MechanicTelemetry(Engineer):
@@ -307,15 +315,21 @@ class MechanicTelemetry(Engineer):
             batches.append((car, tr, b, ok, loose and car_ok))
         # all cars are measured against the reference as it stood before this ingest
         pending = []
+        stills = []
         for car, tr, b, ok, lo in batches:
+            if b is not None and lo:
+                stills.append((tr, *self._still(b)))
             if b is not None and ok:
                 d = state.drivers[car]
                 clear_air = d.interval is None or d.interval >= CLEAR_GAP_S  # no slipstream to inflate the baseline
                 pending.append((tr, self._measure(tr, b, clear_air)))
-            elif b is not None and lo:
-                self._still(tr, b)
             if b is not None:
                 tr.last_utc = float(b["utc"][-1])
+        # a car standing still while the field is too (a restart grid after a red flag) is not a fault
+        field_still = [float(v.mean()) > 0.7 for _, _, v in stills if len(v)]
+        crowd = len(field_still) >= 6 and sum(field_still) / len(field_still) >= 0.3
+        for tr, ts, v in stills:
+            tr.still.add(ts, np.zeros(len(v)) if crowd else v)
         # conditions that move every car together (rain, a restart, wind) are divided out
         for key in ("pw", "rp", "bk", "pc"):
             meds = [float(np.median(p[key][1])) for _, p in pending if len(p[key][1]) >= 2]
@@ -373,8 +387,7 @@ class MechanicTelemetry(Engineer):
             on = pos["on_track"][o][idx] > 0.5
             cell = np.floor(x / CELL).astype(np.int64) * 100003 + np.floor(y / CELL).astype(np.int64)
             cell[(near > 1.5) | ~on] = -1
-            if not _positions_agree(data, pos):
-                cell[:] = -1  # the position feed is frozen or scrambled: no place on track, no field comparison
+            cell[~_positions_agree(data, pos, u)] = -1  # frozen or scrambled positions: no place on track
         valid = np.isfinite(speed) & np.isfinite(rpm) & (thr <= 100) & (brk <= 100)
         return {"utc": u, "speed": speed, "rpm": rpm, "gear": gear, "thr": thr, "brk": brk, "drs": drs,
                 "cell": cell, "valid": valid}
@@ -382,9 +395,10 @@ class MechanicTelemetry(Engineer):
     def _drs_key(self, drs: np.ndarray) -> np.ndarray:
         return (drs >= 8).astype(np.int64)
 
-    def _still(self, tr: CarTrack, b: dict) -> None:
+    @staticmethod
+    def _still(b: dict) -> tuple[np.ndarray, np.ndarray]:
         mv = b["valid"] & (b["cell"] >= 0)
-        tr.still.add(b["utc"][mv], (b["speed"][mv] < 15).astype(float))
+        return b["utc"][mv], (b["speed"][mv] < 15).astype(float)
 
     def _measure(self, tr: CarTrack, b: dict, clear_air: bool = True) -> dict:
         u, speed, rpm, gear, thr, brk = b["utc"], b["speed"], b["rpm"], b["gear"], b["thr"], b["brk"]
@@ -406,7 +420,6 @@ class MechanicTelemetry(Engineer):
         rr_a = np.array(rr)
         keep = np.isfinite(rr_a)
         pend = {"pw": (np.array(ts), np.array(rs)), "rp": (np.array(ts)[keep], rr_a[keep])}
-        self._still(tr, b)
         # ---- slow / coasting against the field
         sl_t, sl_v, co_v = [], [], []
         pc_t, pc_v = [], []
