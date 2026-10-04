@@ -78,6 +78,8 @@ class FieldIn:
     life: np.ndarray = field(default_factory=lambda: np.array([18.0, 28.0, 38.0]))
     sc_rate: float = 0.0075  # safety-car starts per lap
     vsc_rate: float = 0.0045
+    sc_near: float | None = None  # per-lap SC start rate for the next 2 laps from the safetycar engineer (None: sc_rate)
+    vsc_near: float | None = None
     sc_len: float = 4.0
     vsc_len: float = 2.0
     sc_now: int = 0  # 0 green, 1 VSC, 2 SC in force at the anchor
@@ -148,7 +150,11 @@ class Draws:
         status = np.zeros((S, R), dtype=np.int8)
         first = np.full(S, R, dtype=np.int64)
         for k, kind, rate, mean_len in ((0, 1, F.vsc_rate, F.vsc_len), (1, 2, F.sc_rate, F.sc_len)):
-            hit = self.u_sc_lap[:, k, :R] < rate
+            near = F.vsc_near if k == 0 else F.sc_near
+            rv = np.full(R, rate)
+            if near is not None:
+                rv[:2] = near
+            hit = self.u_sc_lap[:, k, :R] < rv[None, :]
             start = np.where(hit.any(1), hit.argmax(1), R)
             dur = 1 + poisson(mean_len, u[:, k])
             on = (idx >= start[:, None]) & (idx < (start + dur)[:, None])

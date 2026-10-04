@@ -45,7 +45,20 @@ def _gap(a, A, lo: int, hi: int) -> float | None:
     return min(u) - A.util if u else None
 
 
-def decide(a, prev_target: int | None, *, pit_open: bool = True, sc_phase: str = "none", prev_call: str | None = None):
+SC_ALERT_P = 0.08  # the safetycar engineer's alert level (pitwall/engineers/safetycar.py ALERT_P)
+
+
+def _sc_prob(view) -> float | None:
+    """P(SC or VSC within 2 laps) from the safetycar engineer, None when it is not on this pit wall."""
+    try:
+        v = view.race("safetycar").get("neutral_prob_2laps")
+    except KeyError:
+        return None
+    return float(v) if isinstance(v, (int, float)) else None
+
+
+def decide(a, prev_target: int | None, *, pit_open: bool = True, sc_phase: str = "none", prev_call: str | None = None,
+           sc_prob: float | None = None):
     """(action, compound, confidence, rule, plan A) for one car's analysis and last lap's target stop lap.
 
     The plan says where a stop is worth most; the pit-probability model (``a.pp``, the models bundle's
@@ -84,7 +97,10 @@ def decide(a, prev_target: int | None, *, pit_open: bool = True, sc_phase: str =
         if (g_win is not None and g_win <= S["tol_prep"] / h and p3 >= S["p3_prep"] * h and p1 >= S["p1_prep"] * h
                 and near):
             return "PREPARE_BOX", comp, min(0.95, max(0.5, _phi(d / se))), "stop_soon", A
-    if a.gain_sc is not None and a.gain_sc >= S["gain_sc"] and sc_phase == "none":
+    bar = S["gain_sc"]
+    if sc_prob is not None and S["use_sc_prob"] and sc_prob >= SC_ALERT_P:  # the safetycar engineer warns: a smaller gain is worth the call
+        bar = min(bar, S["sc_alert_gain"])
+    if a.gain_sc is not None and a.gain_sc >= bar and sc_phase == "none":
         return "BOX_IF_SC", a.sc_best_comp, min(0.9, 0.5 + 0.2 * a.gain_sc), "sc_gain", A
     return "STAY_OUT", None, min(0.97, max(0.5, _phi(d / se))), "stay", A
 
@@ -105,6 +121,7 @@ class HeadOfStrategy(Engineer):
         out = []
         rules = view.race("rules")
         weather = view.race("weather")
+        sc_prob = _sc_prob(view)
         for n in cars:
             a = res.get(n)
             d = state.drivers[n]
@@ -116,7 +133,8 @@ class HeadOfStrategy(Engineer):
             lap0, tgt0, before = self._hist.get(n, (None, None, None))
             prev_target = before if lap0 == d.laps else tgt0  # target stop lap decided on the previous lap
             action, comp, conf, rule, chosen = decide(a, prev_target, pit_open=rules.get("pit_lane_open") is not False,
-                                                      sc_phase=str(rules.get("sc_phase") or "none"), prev_call=self._last.get(n))
+                                                      sc_phase=str(rules.get("sc_phase") or "none"), prev_call=self._last.get(n),
+                                                      sc_prob=sc_prob)
             self._last[n] = action
             target = chosen.stops[0][0] if chosen is not None and chosen.stops else None
             self._hist[n] = (d.laps, target, before if lap0 == d.laps else tgt0)

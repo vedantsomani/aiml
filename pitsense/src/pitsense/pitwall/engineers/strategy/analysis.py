@@ -35,6 +35,8 @@ SETTINGS = {
     "p_sc": 0.7,  # share of surprise neutralisations that are full safety cars
     "w_time": 0.001,  # places per second of race time: breaks ties between plans with equal expected position
     "lam_prior": 0.02,  # places per lap between a plan's first stop and the typical stop timing (rivals' pit probabilities)
+    "use_sc_prob": True,  # simulator and BOX_IF_SC use the safetycar engineer's 2-lap probabilities when present
+    "sc_alert_gain": 0.3,  # BOX_IF_SC gain bar (places) while the safetycar engineer warns of an SC/VSC
     "use_hazard": True,  # head: time box calls with the pit probabilities (False: the plan alone, as before)
     "p1_box": 0.25,  # BOX needs a stop probability this lap of at least this ...
     "p3_box": 0.50,  # ... or within 3 laps of at least this
@@ -124,6 +126,20 @@ def _anchor_time(memory, number: str, A: int, pace: float):
     return last.t_end + (A - last.lap) * pace, max(0, A - last.lap)
 
 
+def near_rates(view) -> tuple[float | None, float | None]:
+    """Per-lap SC / VSC start rates for the next two laps from the safetycar engineer (None when it is absent)."""
+    if not SETTINGS["use_sc_prob"]:
+        return None, None
+    try:
+        r = view.race("safetycar")
+    except KeyError:
+        return None, None
+    ps, pv = r.get("sc_prob_2laps"), r.get("vsc_prob_2laps")
+    if not isinstance(ps, (int, float)) or not isinstance(pv, (int, float)):
+        return None, None
+    return 1 - (1 - min(ps, 0.9)) ** 0.5, 1 - (1 - min(pv, 0.9)) ** 0.5
+
+
 def build_field(state, view, memory, ctx, pri: Priors, A: int) -> tuple[FieldIn, list[str], dict]:
     """The running field at the end of lap ``A``, as arrays."""
     tyre_r = view.race("tyre")
@@ -209,6 +225,7 @@ def build_field(state, view, memory, ctx, pri: Priors, A: int) -> tuple[FieldIn,
     }
     F.life = np.array([pri.life[c] for c in DRY])
     F.sc_rate, F.vsc_rate, F.sc_len, F.vsc_len = pri.sc_rate, pri.vsc_rate, pri.sc_len, pri.vsc_len
+    F.sc_near, F.vsc_near = near_rates(view)
     F.sc_now, F.sc_now_left = PHASES.get(str(rule_r.get("sc_phase") or "none"), (0, 0))
     F.pass_p = tuple(pri.pass_p)
     F.ref_pace = ref_pace
