@@ -72,7 +72,8 @@ Dark, high contrast, one page.
   its team colour. Your cars are larger, ringed in white, labelled with the TLA and drawn on top; hover any
   car for its position, tyre and the gap to the car ahead and behind. Dots glide between updates. The map
   is rotated so the long axis of the circuit is horizontal and fitted to the panel. With no outline
-  (new circuit, or a recording) it draws the trails the cars leave instead. Cars in the pits or off track fade.
+  (new circuit, or a recording) it draws a provisional outline built from the cars' own positions once two
+  laps are done (`provisional: true`), and the trails until then. Cars in the pits or off track fade.
 - **Pit wall radio (right, under the map).** A chat feed for the focus cars, oldest first: real driver
   radio on the left (transcript, or "transcript pending" for the first 15 s, and a play button for the real
   mp3), our pit wall on the right (the head-of-strategy call in the voice's words, with a play button for the
@@ -102,11 +103,29 @@ Snapshot `extra` also carries: `positions` `{t, cars: {car: [x, y, on_track]}}` 
 sample, refreshed at most every 0.5 session s), `track` `{x, y, start, pit, key}` or null (the outline,
 sent with every snapshot so a new browser has it; the page rebuilds only when `key` changes),
 `team_radio` (last 80 driver clips of the session: `id, car, tla, t, lap, text, audio`; `text` is null
-until 15 s after the message), and `wall_msgs` (last 120 pit-wall entries: voice calls and alerts with
+until 15 s after the message in an archive replay; live and followed recordings show it when the
+transcript file really exists, and `audio` is null until the mp3 is on disk), and `wall_msgs` (last 120 pit-wall entries: voice calls and alerts with
 `id, kind, car, t, lap, text`). A `pos` event is `{t, speed, cars}` plus `team_radio` when it changed.
 Feed events (positions, radio) never run the engineers or publish snapshots, so calls are unchanged.
-All sources load feeds (archive: Position.z and TeamRadio; CarData is skipped). Recordings carry no
-session folder, so there is no mp3 or transcript for them, and no outline; live follows the same code.
+All sources load feeds (archive: Position.z and TeamRadio; CarData is skipped).
+
+**Live and followed recordings.** The runtime keeps the merged `SessionInfo` (`Meeting.Circuit.Key`,
+`StartDate` + `GmtOffset`, `Path`):
+
+- *Outline*: `trackmap.track_asof(circuit_key, session start)`, looked up as soon as SessionInfo arrives.
+  If no earlier race of that circuit is stored, `trackmap.live_outline` builds one from the published
+  positions of the quickest clean lap once two laps are done (as-of; no pit lane; `track.provisional`).
+- *Radio*: every TeamRadio capture is queued on a `radio.LiveRadio` (two daemon threads, the event loop never
+  waits). It downloads `https://livetiming.formula1.com/static/` + SessionInfo `Path` + capture path into
+  `<recording>.session/TeamRadio/` (next to the recording), then transcribes with faster-whisper `small.en`
+  (GPU, CPU fallback) and writes `<clip>.json` atomically. The text shows in `extra.team_radio` the moment
+  that file exists (no fixed 15 s), and `/api/teamradio` serves the mp3 from that folder once it is there.
+  `pitsense record` fills the same folder. Following a finished recording reuses any mp3 or transcript already
+  in `<recording>.session/` and downloads and transcribes what is missing.
+- *Offline*: a failed download is retried 3 times (2 s, 4 s), then skipped with a warning. The pit wall, map
+  and calls carry on, the clip has no audio and no text, `/api/teamradio` answers 404, and
+  `/api/health` shows `radio: {queued, downloaded, reused, download_failed, transcribed, transcribe_failed,
+  error}` and `track: stored | provisional`. If the Whisper model cannot load, audio is still saved.
 
 ```
 curl -s localhost:8765/api/snapshot | python -m json.tool | head

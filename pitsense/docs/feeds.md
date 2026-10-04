@@ -105,5 +105,28 @@ agree on 75 % of words; `small.en` is right where they differ ("brake pedal" vs 
   circuits come from other years, as-of.
 * Start/finish is the published crossing time, +/- 1 s of track (about 60 m).
 * Telemetry has no tyre or engine temperatures: the feed's channels are RPM, speed, gear, throttle, brake, DRS only.
-* Live: `load_recording` / `RecordingTail` skip feed topics unless `feeds=True`; the pit-wall runtime must
-  pass it. The live feed's real publish delay was not measured here (no live session).
+* Live: `load_recording` / `RecordingTail` skip feed topics unless `feeds=True`; the pit-wall runtime passes it.
+  The live feed's real publish delay was not measured here (no live session; the live path was exercised on
+  synthesized recordings, see "Live" below).
+* Live radio needs network for the mp3s; offline there is no audio or text (the rest keeps working).
+
+## Live
+
+Same code, different sources of the files (`radio.LiveRadio`, `live.feed_radio`, `trackmap.session_circuit`,
+`trackmap.live_outline`; wiring in `pitwall/runtime.py`).
+
+* **Circuit**: SessionInfo gives `Meeting.Circuit.Key` and the scheduled start (`StartDate` + `GmtOffset`);
+  `track_asof(key, start)` then works as in an archive replay. Without a stored earlier race, `live_outline`
+  takes the quickest clean (green, no pit) lap among the completed laps after lap 1, finds the closed loop in
+  that car's published positions around the lap end, and resamples it to 400 points. As-of: it reads only
+  `state.feeds` and runs when the leader is on lap 3 or later. Checked on Hungary 2025: 43 229 units against
+  43 213 for the outline built offline from the whole race. No pit lane.
+* **Radio**: a recording holds only TeamRadio paths. `LiveRadio` downloads `static/` + SessionInfo `Path` +
+  capture path (only `TeamRadio/<name>.mp3` is accepted) into `<recording>.session/TeamRadio/`, then runs
+  Whisper `small.en` in a second thread and writes `<name>.json` (tmp file, then rename). A transcript counts
+  as known when that file exists, i.e. the real latency (`Feeds` uses `latency_s = 0` when the source has a
+  `radio_dir`). Existing mp3s and transcripts are reused.
+* **Measured** (Hungary 2026 and 2025 synthesized as live JSONL, 19-20 MB, 76-82 k messages, `--file --follow`
+  equivalent, real downloads from livetiming.formula1.com and GPU Whisper): 10 of 10 and 11 of 11 clips
+  downloaded and transcribed with no failures, outline 400 points (stored for 2026, provisional for 2025),
+  22 and 20 cars on the map, `/api/teamradio` served the mp3.
