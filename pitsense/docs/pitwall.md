@@ -68,6 +68,11 @@ and a phone can each follow a different car.
 - Concurrency: every browser has its own server thread and a bounded queue (8); a slow one loses old
   updates, a stalled one is cut after 8 s, more than 64 viewers get 503. The publishing loop never waits
   for a browser. `/api/health` shows `"viewers": N`.
+- Measured (2026 Azerbaijan GP replay at max speed, 71,586 events, `--host 127.0.0.1 --token t`, 5 SSE clients
+  plus a thread calling /api/snapshot, calls, alerts and health every 50 ms; 162 MB streamed): whole-race
+  loop time 272 s and 316 s with 0 clients (two runs), 360 s and 327 s with 5; snapshot p50 886/1017 ms
+  with 0 clients vs 1146/1073 ms with 5. The spread between identical runs is as large as the effect, so
+  clients cost roughly 5-15% on this single-core-bound loop (the GIL is shared with the JSON writers).
 - The token is a shared secret over plain http: fine for a home or garage network, not for the internet.
 
 ## 5. The screen
