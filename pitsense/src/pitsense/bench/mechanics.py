@@ -208,17 +208,18 @@ def ep_from_flags(t: np.ndarray, on: np.ndarray) -> list[tuple[float, float]]:
     return eps
 
 
-def det_tel(rec: dict, checks, on: float, hold: float = None, off_ratio: float = 0.6, clear: float = 30.0):
+def det_tel(rec: dict, checks, on: float, hold: float = None, off_ratio: float = None, clear: float = None):
     """Telemetry episodes by re-running the level logic on the recorded scores."""
-    from ..pitwall.engineers.mechanic_telemetry import THRESH, Level
+    from ..pitwall.engineers.mechanic_telemetry import OFF_RATIO, THRESH, Level
 
     out = {}
     for car, c in rec["cols"].items():
         t = np.array(c["t"])
         flags = np.zeros(len(t), bool)
         for ck in checks:
-            h = THRESH[ck][2] if hold is None else hold
-            lv = Level(on, on * off_ratio, h, clear)
+            h = THRESH[ck][1] if hold is None else hold
+            cl = THRESH[ck][2] if clear is None else clear
+            lv = Level(on, on * (OFF_RATIO if off_ratio is None else off_ratio), h, cl)
             for i, (ti, s) in enumerate(zip(t, c[ck])):
                 lv.update(float(ti), None if (s is None or (isinstance(s, float) and math.isnan(s))) else float(s))
                 if lv.active:
@@ -354,14 +355,13 @@ def detector_makers(params: dict):
 GRID_ALL = {
     **{k: v[1] for k, v in GRIDS.items()},
     "radio": [0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
-    "chief": [0.6, 0.7, 0.8, 0.9],
+    "chief": [0.6, 0.7, 0.75, 0.8, 0.85, 0.9],
     "lapdrop_baseline": [1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0],
 }
 
 
 def tune(records: list[dict], budget: float = FA_BUDGET) -> tuple[dict, dict]:
-    """Per detector: among thresholds within the false-alarm budget, the strictest one that keeps at least
-    90 % of the best recall by timing flag (so a handful of events cannot pull it to the loosest setting)."""
+    """Per detector: among thresholds within the false-alarm budget, the best of (hits - 0.2 * false alarms)."""
     params, table = {}, {}
     for name, grid in GRID_ALL.items():
         rows = []
@@ -372,9 +372,10 @@ def tune(records: list[dict], budget: float = FA_BUDGET) -> tuple[dict, dict]:
         if not ok:  # nothing within budget: the strictest setting
             params[name] = max(grid) if name != "lapdrop_baseline" else max(grid)
         else:
-            best = max(r["flag"] + r["pre"] for _, r in ok)
-            keep = [(v, r) for v, r in ok if r["flag"] + r["pre"] >= 0.9 * best]
-            params[name] = max(v for v, _ in keep)
+            # utility: hits (before + by flag) minus 0.2 per false-alarm episode; ties go to the strictest threshold
+            util = {v: r["flag"] + r["pre"] - 0.2 * r["n_fa"] for v, r in ok}
+            top = max(util.values())
+            params[name] = max(v for v, u in util.items() if u >= top - 1e-9)
         table[name] = rows
     return params, table
 

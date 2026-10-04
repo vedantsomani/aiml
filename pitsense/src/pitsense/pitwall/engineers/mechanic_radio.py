@@ -28,7 +28,7 @@ from ..engineer import Engineer
 from ..types import Alert
 
 HALF_LIFE_S = 900.0
-ALERT_RISK = 0.5
+ALERT_RISK = 0.6
 
 _FAULT = r"(?:lost|lose|losing|loss|no|not (?:working|enough)|failing|failure|failed|fail|broken|gone|dead|cut(?:ting)? out|stuck|weak|bad|problem|issue|wrong|damage|leak\w*|shut(?:ting)? down|inconsistent|long|flat|soft|spongy|critical)"
 

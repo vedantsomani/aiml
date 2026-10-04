@@ -46,13 +46,15 @@ MIN_BASE = 40  # samples before the own baseline is trusted (else the field, 1.0
 CLEAR_GAP_S = 1.8  # full-throttle speed is only compared with the car's own when no car is within this gap ahead
 MIN_REF = 40  # samples in a grid cell before it is a reference
 
-# (on, off, hold_s, clear_s): level-triggered alert thresholds, chosen on 2025 (bench/mechanics.py)
-THRESH: dict[str, tuple[float, float, float, float]] = {
-    "power_loss": (0.6, 0.35, 20.0, 30.0),
-    "gearbox": (0.6, 0.35, 8.0, 30.0),
-    "brake_issue": (0.7, 0.4, 12.0, 30.0),
-    "slow_car": (0.8, 0.5, 8.0, 20.0),
+# (on, hold_s, clear_s): level-triggered alert thresholds. ``on`` was chosen on 2025 by
+# bench/mechanics.py (docs/engineers/mechanics.md); the alert drops again below 0.6 * on for ``clear_s``.
+THRESH: dict[str, tuple[float, float, float]] = {
+    "power_loss": (0.9, 20.0, 30.0),
+    "gearbox": (0.9, 8.0, 30.0),
+    "brake_issue": (0.9, 12.0, 30.0),
+    "slow_car": (0.9, 8.0, 20.0),
 }
+OFF_RATIO = 0.6
 
 
 class Series:
@@ -231,7 +233,7 @@ class CarTrack:
         self.last_gear = np.nan
         self.last_throttle = np.nan
         self.scores: dict[str, float | None] = dict.fromkeys(CHECKS)
-        self.levels = {c: Level(*THRESH[c]) for c in CHECKS}
+        self.levels = {c: Level(THRESH[c][0], THRESH[c][0] * OFF_RATIO, THRESH[c][1], THRESH[c][2]) for c in CHECKS}
         self.detail: dict[str, float] = {}
         self.n_ok = 0.0  # seconds of usable data seen
 
