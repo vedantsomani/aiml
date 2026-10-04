@@ -210,21 +210,28 @@ def predict_cut(pic: Picture, sprint: bool = False) -> float | None:
     a, kind = anchor(pic)
     if a is None or pic.cut_pos is None:
         return a
-    tab = _model().get("evolution", {}).get(f"{pic.part}{'s' if sprint else ''}")
+    m = _model()
+    by_sprint = m.get("config", {}).get("by_sprint", False)
+    evo = m.get("evolution", {})
+    tab = evo.get(f"{pic.part}{'s' if (sprint and by_sprint) else ''}") or evo.get(str(pic.part))
     if not tab:
         return a
     key = f"{time_bin(pic.time_left or 0.0)}{'k' if kind else ''}"
     return round(a + tab.get(key, 0.0), 3)
 
 
-def ko_features(c: CarQ, pic: Picture, pred: float | None) -> list:
-    tl = pic.time_left or 0.0
-    rel = (c.best - pred) if (c.best is not None and pred is not None) else 3.0
+def ko_vec(best, rank, in_pit, laps, tl, cut_pos, n_elig, pred) -> list:
+    """Inputs of the knockout model (plain numbers, so the benchmark can rebuild them from rows)."""
+    rel = (best - pred) if (best is not None and pred is not None) else 3.0
     rel = max(-3.0, min(3.0, rel))
-    off = (c.rank - (pic.cut_pos or c.rank)) / max(len(pic.order), 1)
+    off = (rank - cut_pos) / max(n_elig, 1)
     tlf = min(tl, 600.0) / 600.0
-    return [rel, 1.0 if c.best is None else 0.0, off, tlf, 1.0 if c.in_pit else 0.0,
-            min(c.laps_in_part, 8) / 8.0, rel * tlf]
+    return [rel, 1.0 if best is None else 0.0, off, tlf, 1.0 if in_pit else 0.0, min(laps, 8) / 8.0, rel * tlf]
+
+
+def ko_features(c: CarQ, pic: Picture, pred: float | None) -> list:
+    return ko_vec(c.best, c.rank, c.in_pit, c.laps_in_part, pic.time_left or 0.0,
+                  pic.cut_pos or c.rank, len(pic.order), pred)
 
 
 def p_knocked_out(c: CarQ, pic: Picture, pred: float | None) -> float | None:
