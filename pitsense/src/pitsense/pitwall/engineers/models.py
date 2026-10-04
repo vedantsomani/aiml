@@ -63,40 +63,87 @@ class ModelsEngineer(Engineer):
         return lap_end, pit_entry
 
     # ------------------------------------------------------------------ values
+    def __init__(self, ctx, memory) -> None:
+        super().__init__(ctx, memory)
+        self._memo: dict[tuple, dict] = {}  # row content -> predictions (a model is a pure function of its row)
+        self._pre: tuple | None = None  # (view, {car: values}) from prefetch
+
+    def prefetch(self, state, numbers, view) -> None:
+        """Predict for every car in one batch per task (the snapshot asks for them all)."""
+        if self.ctx.models is None:
+            return
+        rows = {n: self.decision_rows(state, n, view) for n in numbers}
+        self._fill(self.ctx.models, [p[0] for p in rows.values() if p[0] is not None],
+                   [p[1] for p in rows.values() if p[1] is not None])
+        self._pre = (view, {n: self._values(*pair) for n, pair in rows.items()})
+
     def car(self, state, number, view):
         bundle = self.ctx.models
         if bundle is None:
             return dict(_NONE)
+        if self._pre is not None and self._pre[0] is view and number in self._pre[1]:
+            return dict(self._pre[1][number])
         lap_end, pit_entry = self.decision_rows(state, number, view)
+        self._fill(bundle, [lap_end] if lap_end is not None else [], [pit_entry] if pit_entry is not None else [])
+        return self._values(lap_end, pit_entry)
+
+    def _values(self, lap_end, pit_entry) -> dict:
         out = dict(_NONE)
         if lap_end is not None:
-            for h, key in ((1, "pit_prob_1"), (3, "pit_prob_3")):
-                out[key] = _one(bundle, f"pit_within_{h}", lap_end)
-            out.update(_stop_distribution(bundle, lap_end))
+            out.update(self._memo[("lap_end", _key(lap_end))])
         if pit_entry is not None:
-            out["rejoin_pred"] = _one(bundle, "position_after_stop", pit_entry)
+            out.update(self._memo[("pit_entry", _key(pit_entry))])
         return out
 
+    def _fill(self, bundle, lap_end: list[dict], pit_entry: list[dict]) -> None:
+        """Memoise the predictions of every row; rows not seen before go through the models in one batch per task."""
+        new: dict[tuple, dict] = {}
+        for kind, rows in (("lap_end", lap_end), ("pit_entry", pit_entry)):
+            for r in rows:
+                k = (kind, _key(r))
+                if k not in self._memo:
+                    new[k] = r
+        le = [k for k in new if k[0] == "lap_end"]
+        pe = [k for k in new if k[0] == "pit_entry"]
+        if le:
+            df = _frame([new[k] for k in le])
+            p1, p3 = _batch(bundle, "pit_within_1", df), _batch(bundle, "pit_within_3", df)
+            stop = _stop_batch(bundle, df)
+            for i, k in enumerate(le):
+                self._memo[k] = {"pit_prob_1": p1[i], "pit_prob_3": p3[i], **stop[i]}
+        if pe:
+            rej = _batch(bundle, "position_after_stop", _frame([new[k] for k in pe]))
+            for i, k in enumerate(pe):
+                self._memo[k] = {"rejoin_pred": rej[i]}
 
-def _one(bundle, task: str, row: dict):
+
+def _key(row: dict) -> tuple:
+    return tuple((k, None if v is None or v != v else v) for k, v in row.items())
+
+
+def _frame(rows: list[dict]):
+    import pandas as pd
+
+    return pd.DataFrame([{k: (np.nan if v is None else v) for k, v in r.items()} for r in rows])
+
+
+def _batch(bundle, task: str, df) -> list:
     if task not in bundle.models:
-        return None
-    import pandas as pd
-
-    df = pd.DataFrame([{k: (np.nan if v is None else v) for k, v in row.items()}])
-    p = float(bundle.predict(task, df)[0])
-    return p if np.isfinite(p) else None
+        return [None] * len(df)
+    p = bundle.predict(task, df)
+    return [float(x) if np.isfinite(x) else None for x in p]
 
 
-def _stop_distribution(bundle, row: dict) -> dict:
-    """``p_stop_le_k`` (k = 1, 2, 3, 5, 8), expected and median laps to the next stop; None without the model."""
+def _stop_batch(bundle, df):
+    """Per row: ``p_stop_le_k`` (k = 1, 2, 3, 5, 8), expected and median laps to the next stop ({} if not finite);
+    {} without the model."""
     if "laps_to_stop" not in bundle.models:
-        return {}
-    import pandas as pd
-
+        return [{}] * len(df)
     from ...bench.laps_to_stop import summarize
 
-    df = pd.DataFrame([{k: (np.nan if v is None else v) for k, v in row.items()}])
     s = summarize(np.asarray(bundle.models["laps_to_stop"].predict_cdf(df), float))
-    out = {k: float(v[0]) for k, v in s.items()}
-    return out if all(np.isfinite(v) for v in out.values()) else {}
+    out = []
+    for i in range(len(df)):
+        d = {k: float(v[i]) for k, v in s.items()}
+        out.append(d if all(np.isfinite(v) for v in d.values()) else {})
+    return out

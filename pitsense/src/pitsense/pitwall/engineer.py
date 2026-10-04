@@ -87,6 +87,10 @@ class Engineer:
     def observe(self, state: "RaceState") -> None:
         pass
 
+    def prefetch(self, state: "RaceState", numbers: list[str], view: "View") -> None:
+        """Optional: called before a snapshot asks ``car`` for each of ``numbers``, so a batch can be prepared.
+        Must not change what ``car`` returns."""
+
     def car(self, state: "RaceState", number: str, view: "View") -> dict[str, Scalar]:
         return {}
 
