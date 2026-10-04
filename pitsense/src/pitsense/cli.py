@@ -58,6 +58,12 @@ def cmd_fetch(a) -> None:
     for ref in refs:
         archive.download_session(ref, topics, force=a.force)
         extra = ""
+        if a.weekend:
+            from . import weekend
+
+            got = weekend.download_weekend(ref, DEFAULT_TOPICS, force=a.force,
+                                           feed_topics=("Position.z",))
+            extra += "  weekend +" + ",".join(r.session_name for r in got)
         if a.radio:
             n, miss = archive.download_radio(ref)
             extra = f"  radio +{n} mp3 ({miss} missing)"
@@ -293,6 +299,8 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--force", action="store_true", help="re-download")
     s.add_argument("--telemetry", action="store_true", help="also CarData.z and Position.z (~17 MB per race)")
     s.add_argument("--radio", action="store_true", help="also TeamRadio and its mp3 files")
+    s.add_argument("--weekend", action="store_true",
+                   help="also the meeting's other sessions (practice, qualifying, sprint); Position.z for the qualifying ones")
     s.set_defaults(fn=cmd_fetch)
 
     s = sub.add_parser("replay", help="timing tower + 'pit now' projection as of a lap, using only the past")
