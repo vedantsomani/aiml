@@ -52,7 +52,7 @@ THRESH: dict[str, tuple[float, float, float]] = {
     "power_loss": (0.9, 20.0, 30.0),
     "gearbox": (0.9, 8.0, 30.0),
     "brake_issue": (0.9, 12.0, 30.0),
-    "slow_car": (0.9, 8.0, 20.0),
+    "slow_car": (0.6, 8.0, 20.0),
 }
 OFF_RATIO = 0.6
 

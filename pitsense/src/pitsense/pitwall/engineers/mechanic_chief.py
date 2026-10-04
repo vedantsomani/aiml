@@ -28,7 +28,7 @@ from ..engineer import Engineer
 from ..memory import is_clean
 from ..types import Alert
 
-ALERT_RISK = 0.7  # chosen on 2025 (bench/mechanics.py): telemetry at its own alert level, or corroborated evidence
+ALERT_RISK = 0.75  # chosen on 2025 (bench/mechanics.py): telemetry at its own alert level, or corroborated evidence
 WEIGHTS = {"tel": 1.0, "radio": 0.8, "rc": 0.9, "lap": 0.5}
 RC_WINDOW_S = 600.0
 
