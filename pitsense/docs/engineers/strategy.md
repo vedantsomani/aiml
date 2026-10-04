@@ -275,7 +275,7 @@ Real switch = a pit stop that changes the tyre class (slicks / inters / wets), r
 share of switches with a BOX call for the right class whose episode starts within +-2 laps of the in-lap.
 Precision: share of BOX class-switch episodes with such a real switch (an episode starts when the car's call
 changes). "naive" = BOX on the lap the rain flag flips (up while on slicks: INTERS; down while on inters/wets:
-SLICKS). Races counted: those where the wet engine had a model (races before 2022 have too little wet history).
+SLICKS). Races counted: those where the wet engine ran (before 2022 there is too little wet history; some flag-only races never leave the dry planner).
 
 2018-2024 (tuning, 8 races, 89 real switches): head recall 0.37, precision 0.22 (F1 0.28) with the tuned
 thresholds (untuned: 0.28 / 0.13); naive 0.19 / 0.11. Grid: `g_box` {5,10,20,40,80} x `p_box` {0.7,0.85,0.95} x
@@ -291,7 +291,7 @@ false of 80 calls); naive 0.09 / 0.07 (62 calls). Per race (real / head calls / 
 | 2025 Belgian | 10 | 10 | 0 | 0 | 0 |
 | 2026 Canadian | 1 | 0 | 0 | 0 | 0 |
 | 2026 Italian | 0 | 10 | 0 | 0 | 0 |
-| (no wet model) 2025 Miami / 2026 Dutch / 2026 Bahrain | 0 / 0 / 9 | naive fallback | | | |
+| wet engine not engaged: 2025 Miami, 2026 Dutch, 2026 Bahrain | 0 / 0 / 9 | dry planner (9, 0, 0 calls) | | 20 / 73 / 0 naive | 0 |
 
 Honest reading: the head beats the flag rule, but most calls are early or late, and a call for a group of ten
 cars is ten false calls when the field waits. Rain onset is not predictable from the flag; the slicks' own pace only
