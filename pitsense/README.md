@@ -12,12 +12,22 @@ A virtual F1 pit wall that runs on the public timing feed. It has one engineer p
 | Weather | rain in the next 10 minutes, slick / intermediate crossover | [weather](docs/engineers/weather.md) |
 | Models | cross-race models served live, identical to the benchmark | [models](docs/models.md) |
 | Strategy & head | Monte Carlo race simulation, Plan A / B, BOX / STAY OUT calls with reasons | [strategy](docs/engineers/strategy.md) |
-| Voice | fine-tuned SmolLM2 plus our own small model: radio calls and briefs, fact-checked, spoken by Piper | [voice](docs/engineers/voice.md) |
+| Voice | fine-tuned SmolLM2 plus our own small model: radio calls and briefs, fact-checked, spoken by Piper |
+| Mechanics | telemetry, radio and chief mechanic: power loss, slowdowns, problem reports | [mechanics](docs/engineers/mechanics.md) |
+| Safety car | calibrated SC / VSC probability for the next 2 laps, "safety car likely" alert | [safetycar](docs/engineers/safetycar.md) |
+| Rival radio | other teams' radio as alerts: "box box", "Plan B", "tyres are gone" | [rivalradio](docs/engineers/rivalradio.md) |
+| Weekend | tyre sets left from FP/quali; qualifying pit wall (cut line, send-now calls) | [weekend](docs/engineers/weekend.md) | [voice](docs/engineers/voice.md) |
 
 ```bash
 pitsense pitwall --year 2026 --race hungary --speed 20 --team ferrari   # replay with the dashboard
 pitsense pitwall --live --team ferrari                                  # live race (F1 TV sign-in)
+pitsense pitwall --live --team ferrari --host 0.0.0.0 --token secret    # also open it on a phone on your Wi-Fi
+pitsense pitwall --year 2026 --race hungary --session qualifying        # qualifying pit wall
+pitsense briefing --year 2026 --race bahrain --team ferrari             # pre-race strategy briefing (HTML)
+pitsense report --year 2026 --race bahrain --team ferrari               # post-race report: every call graded
 ```
+
+The dashboard shows the timing tower, a live track map, your team's calls with Plan A/B, and a radio conversation panel. In that panel, real driver radio is transcribed by Whisper, and the pit wall's calls are written by the fine-tuned voice model and spoken by Piper. Type or hold-to-talk questions such as "what if we box now?" or "what if the safety car comes next lap?"; the race simulator answers them.
 
 How a team uses it from day one: [docs/pitwall.md](docs/pitwall.md). How it is built, and the rules every engineer follows: [docs/ENGINEERING.md](docs/ENGINEERING.md).
 
@@ -119,6 +129,17 @@ bench/evaluate.py   expanding-window scoring → reports/leaderboard.md
 - **Tyre age is derived.** It's computed from the stint start, because the feed's own lap counter arrives about 2 s after the line and sometimes freezes mid-race.
 - **Red-flag pit-lane entries aren't stops.** Everyone goes in and tyres are changed for free, so they're excluded from the labels.
 
+## Race tests (full pit wall replay, models trained only on earlier races)
+
+`pitsense shadow-score` grades every logged call against what happened (a call is right within ±2 laps):
+
+| Race | Box calls right | BOX alone | Stay-out right | Stops caught |
+|---|---|---|---|---|
+| Azerbaijan 2026 (safety car laps 31-38) | 63% | 25 / 29 | 96% | 53% |
+| Bahrain 2026 (intermediate start, 73 stops) | 53% | 14 / 22 | 84% | 26% |
+
+The Bahrain test found a real bug, now fixed: a wet start had muted the dry strategy for the rest of the race.
+
 ## Validation against FastF1
 
 All 188 races 2018–2026 are validated per season in [docs/data.md](docs/data.md). The 2025–26 detail is below.
@@ -156,7 +177,11 @@ Full per-race output: `reports/validation.txt`.
 | Undercut by the car behind within 5 laps | `undercut_gbm` | AUC 0.84 | 0.78 (gap rule) |
 | Rain within 10 minutes | nowcast | log loss 0.079 | 0.186 (base rate); only 3 wet races in 2026 |
 | Finishing position at 25/50/75% distance | race simulator | RPS 0.050 | 0.072 (current position) |
-| Box calls within ±2 laps (top 5) | head of strategy | precision 0.42, recall 0.27 | 0.28 / 0.24 (plan-only rule) |
+| Box calls within ±2 laps (top 5) | head of strategy + laps-to-stop model | precision 0.54, recall 0.28 | 0.28 / 0.24 (plan-only rule) |
+| Laps until next stop | `survival_hz` | c-index 0.764, calibrated (pred/obs 1.03) | 0.752 (`gbm_hazard` extrapolated) |
+| Safety car within 2 laps | safety-car engineer | log loss 0.235 | 0.254 (circuit base rate) |
+| Qualifying knock-out | `quali` logit | log loss 0.418 | 0.493 (rank rule) |
+| Wet races: tyre-switch calls (2025-26) | wet engine | precision 0.18, recall 0.32 | 0.07 / 0.09 (rain-flag rule) |
 
 Every engineer value goes into the benchmark rows, so the corrupted-future check (`pitsense leakcheck`) covers all of them. The simulator and calls have their own check (`pitsense strategy-leakcheck`). Full tables are in each engineer's doc.
 
