@@ -118,7 +118,9 @@ class PitWall:
         running = [d.number for d in order if d.running]
         v = self.view(state)
         for e in self.engineers:
-            e.prefetch(state, running, v)
+            pre = getattr(e, "prefetch", None)  # optional (duck-typed engineers need not have it)
+            if pre is not None:
+                pre(state, running, v)
         return Snapshot(
             t=round(state.t, 3),
             lap=state.current_lap,
