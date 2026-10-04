@@ -436,8 +436,8 @@ def reason_text(f: dict[str, float], extras: dict[str, float], base_p: float, ci
 class SafetyCarEngineer(Engineer):
     name = "safetycar"
     requires = ()
-    # Declared inputs for the cross-race models (docs/engineers/safetycar.md).
-    features = ("sc_prob_2laps", "vsc_prob_2laps")
+    # None declared: on 2025 the probabilities added nothing to pit_within_1/3 (docs/engineers/safetycar.md).
+    features = ()
     in_bench = True
 
     def __init__(self, ctx, memory) -> None:
