@@ -81,13 +81,14 @@ Dark, high contrast, one page.
   radio. "radio on" plays new driver clips and pit-wall clips for your cars one after another, never
   overlapping (a backlog of more than 6 drops the oldest at high replay speed); the connect-time backlog
   is never read out.
+- **Ask box (under the radio).** Type a question or hold the microphone; see section 6b.
 - **Alerts and race control (right).** Active alerts sorted critical, warn, info, each with the
   engineer that raised it; below, the latest race-control messages.
 
 Today the head of strategy returns NO_CALL, so cards show NO CALL until it ships. Full `Call` records
 (action, compound, confidence, reasons, plans) render as soon as they arrive.
 
-## 6. API (read-only, JSON)
+## 6. API (JSON; read-only apart from the two ask endpoints)
 
 | Endpoint | Content |
 |---|---|
@@ -98,6 +99,8 @@ Today the head of strategy returns NO_CALL, so cards show NO CALL until it ships
 | `GET /api/stream` | server-sent events: `snapshot` (the snapshot JSON), `pos` (car positions, about 3 Hz on the wall clock at any speed) and `status` |
 | `GET /api/teamradio?car=N&i=K` | the K-th real driver radio mp3 of car N (`audio/mpeg`); only published clips inside the session's `TeamRadio/` folder, anything else 404 |
 | `GET /api/radio.wav?car=N[&i=ID]` | our pit wall's voice message for car N (latest, or by `id` from `extra.wall_msgs`), spoken with Piper |
+| `POST /api/ask` | `{"car": "16", "text": "what if we box now?"}`: ask the pit wall (section 6b) |
+| `POST /api/ask_audio?car=N` | body = recorded audio (webm/opus, ogg, wav, mp4): transcribed on the server, then as `/api/ask` |
 
 Snapshot `extra` also carries: `positions` `{t, cars: {car: [x, y, on_track]}}` (1/10 m, newest published
 sample, refreshed at most every 0.5 session s), `track` `{x, y, start, pit, key}` or null (the outline,
@@ -135,7 +138,53 @@ curl -N localhost:8765/api/stream
 A snapshot is published every 3 session seconds (scaled by speed) and on every leader lap. Timing is
 on the session clock, so the same input gives the same snapshots and call log at any speed. The server
 binds to 127.0.0.1 only unless you pass `--host`; it has no authentication, so keep it on a trusted
-network.
+network. A POST from a page on another origin is refused.
+
+## 6b. Ask the pit wall (text and voice)
+
+Under the radio conversation there is a text box and a microphone button (hold it, speak, release). The
+question and the answer join the conversation as a "you" bubble and a pit-wall bubble; the answer is spoken
+(Piper, `/api/radio.wav?car=N&i=<reply id>`) even with "radio off". A car selector appears when there are
+two or more of our cars. The microphone works on `localhost` (or https) in a browser with MediaRecorder.
+
+```
+curl -s localhost:8765/api/ask -d '{"car":"16","text":"what if we box in 3 laps for hards?"}'
+curl -s "localhost:8765/api/ask_audio?car=16" -H "Content-Type: audio/webm" --data-binary @question.webm
+```
+
+Reply: `{ok, car, tla, answer, source, intent, whatif, audio, you, reply, ms}` (`ask_audio` adds `heard`, `asr_ms`).
+`source` is `whatif` (the engine's own words), or `llm` / `slm` / `template` / `facts` for fact questions
+(the fine-tuned model if it loaded and passed the guard, else the template). Errors: 400 bad body, 403
+cross-origin POST, 413 body over 8 MB, 422 nothing heard, 503 no transcriber.
+
+**Parsing** (`whatif.parse_question`, regexes first, then the voice's free-form router `composer.free_kind`):
+what-ifs are *box now / in N laps / on lap L / for SOFT, MEDIUM, HARD*, two options separated by "or" /
+"versus", *stay out to the end*, *safety car or VSC now / next lap / in N laps* and any of them *against a
+rival* (TLA, number, surname, "the car ahead / behind"). Fact questions are gap (ahead, behind or a car),
+tyre age, pit window, plan B, why, chance of a safety car, and everything else goes to the voice's free-form
+answer (rejoin position, pit loss, weather, laps to go, penalty ...).
+
+**What-if engine** (`whatif.what_if`, `src/pitsense/whatif.py`). It builds the strategy engineer's field and
+the same 288 seeded futures (`analysis.build_field`, `Draws`, `simulate_field`) and scores the asked plans
+with `evaluate_plans` on those futures, so every plan sees the same race and the comparison is paired. A
+"box now" without a compound tries SOFT / MEDIUM / HARD (and a second stop when one stint is too long) and
+reports the best by the head's utility. The comparison is plan A unless two options were given. A safety car
+question re-draws the futures with the neutralisation forced to start in N laps, then compares staying on plan
+A with the best stop under it. Result: `scenario` and `versus` (`label`, `stops`, `exp_pos`, `sd`, `p_top10`,
+`p_podium`, `race_time_s`, `p_ahead_rival`), `p_gain` / `p_loss` / `p_same` (the scenario finishes ahead of /
+behind / level with the other option, same futures), `delta_pos`, `delta_time_s`, `reasons`, `notes` (rule
+breaches such as "must still fit a second compound"), `ms`. As-of: only the race state at `state.t` is read,
+so the answer is identical from the full log and from `log.until(t)` (tested). Deterministic (seeded by race,
+not by clock). About 0.1 to 0.25 s on a 2026 field; the answer is refused before lap 2, in the wet and after
+the flag. The simulator models dry tyres only and the rival plays its default strategy, so "ahead of VER"
+is a probability under that assumption, not a guarantee.
+
+**Threading.** The loop applies each event under `PitWallRuntime.sim_lock`; a question takes the same lock,
+so it sees one still moment and the loop waits for the (short) answer. The voice and Whisper run outside it.
+
+**Speech to text** (`asr.py`): PyAV decodes the browser's webm/opus (no ffmpeg binary), then faster-whisper
+`small.en` through `radio.load_model` (GPU, CPU fallback; loaded on the first spoken question, about 3 s).
+Tests and other front ends can set `rt.transcriber = fn(bytes) -> str`.
 
 ## 7. The call log and shadow scoring
 
