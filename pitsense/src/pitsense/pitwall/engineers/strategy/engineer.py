@@ -6,7 +6,10 @@ Values (per focus car, ``strategy__<key>``):
   position and points; ``plan_b_pos``; ``next_stop_lap`` (plan A's first stop, in-lap);
 * ``now_cost``: places lost by stopping this lap rather than following plan A; ``sc_gain``: places gained by
   stopping under a safety car that comes within 5 laps, over staying on plan A;
-* ``ok`` / ``why``: False with a reason when no plan could be made (wet race, too early, ...), ``sim_ms``.
+* ``ok`` / ``why``: False with a reason when no plan could be made (too early, wet race with no wet-tyre model, ...), ``sim_ms``.
+  In a wet or mixed race the plans are tyre-class switches ("L33 INTERMEDIATE"), ranked on race time by the wet
+  simulator (``wetsim``): ``plan_a_pos`` / ``plan_a_pts`` are None and ``now_cost`` is the seconds lost by not
+  switching this lap.
 
 Race: ``sc_prob_5`` / ``vsc_prob_5`` (chance of a neutralisation within 5 laps, from this circuit's history).
 Plans are refreshed when a focus car completes a lap, the track status changes, or a rule fact changes.
@@ -70,6 +73,13 @@ class StrategyEngineer(Engineer):
         out = {"ok": a.ok, "why": a.why or None, "sim_ms": round(a.ms), "plan_a": None, "plan_a_pos": None,
                "plan_a_pts": None, "plan_b": None, "plan_b_pos": None, "next_stop_lap": None,
                "now_cost": None, "sc_gain": None}
+        if a.ok and a.wet is not None:  # wet simulator: plans are tyre-class switches
+            wr = a.wet
+            out.update(plan_a=plan_text(wr.best.switches), plan_a_pos=None, plan_a_pts=None,
+                       next_stop_lap=wr.best.switches[0][0] if wr.best.switches else None,
+                       now_cost=round(-wr.gain_now_s, 2) if wr.now is not None else None)
+            if wr.plan_b is not None:
+                out["plan_b"] = plan_text(wr.plan_b.switches)
         if a.ok and a.plan_a is not None:
             A = a.plan_a
             out.update(plan_a=plan_text(A.stops), plan_a_pos=round(A.exp_pos, 2), plan_a_pts=round(A.exp_pts, 2),

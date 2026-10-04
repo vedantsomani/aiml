@@ -17,6 +17,7 @@ from ...types import Plan, PlanStop
 from .priors import DRY, LIFE, Priors
 from .run import FieldRun, evaluate_plans, simulate_field
 from .sim import K_STOPS, NOSTOP, Draws, FieldIn
+from . import wetobs
 
 POINTS = np.array([25, 18, 15, 12, 10, 8, 6, 4, 2, 1], dtype=float)
 COMP_NAMES = DRY  # index 0 soft, 1 medium, 2 hard
@@ -48,6 +49,7 @@ SETTINGS = {
     "q2_prep": 0.12,  # PREPARE_BOX needs P(stop within 2 laps) of at least this (and a plan gain within tol_prep)
     "q1_prep": 0.10,  # ... and P(stop within 1 lap) of at least this
     "hold": 0.7,  # a box call made last lap is held down to this share of the thresholds
+    "use_wet_engine": True,  # wet / mixed races: tyre-class calls from the wet simulator (False: NO_CALL as before the wet work)
     "tol_keep": 0.05,  # keep last lap's target stop lap unless the best plan is better by more than this
 }
 OFFS1 = (0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 17, 20, 24, 28, 33, 38, 44, 50, 58)
@@ -117,6 +119,10 @@ class CarAnalysis:
     ms: float = 0.0
     n_sims: int = 0
     n_plans: int = 0
+    wet: object | None = None  # WetResult when the wet simulator planned this car (plan_a / ranked are then empty)
+    wet_in: object | None = None  # the WetIn it was given
+    wet_obs: dict | None = None  # what the wet model read off the field (see wetobs.observe)
+    rain_b: object | None = None  # dry-mode car, rain likely: the wet simulator's Plan B (WetResult)
 
 
 # --------------------------------------------------------------------------- the field
@@ -466,7 +472,9 @@ def analyse(state, view, ctx, memory, cars: list[str], *, S: int | None = None, 
     S = S or (96 if light else st["S"])
     S1 = min(st["S1"], S)
     out: dict[str, CarAnalysis] = {}
-    wet = not bool(view.race("rules").get("race_dry", True)) or bool(view.race("weather").get("wet_running"))
+    rules_r, weather_r = view.race("rules"), view.race("weather")
+    wet = not bool(rules_r.get("race_dry", True)) or bool(weather_r.get("wet_running"))
+    wm = wetobs.model_for(ctx)
     by_anchor: dict[int, list[str]] = {}
     for n in cars:
         d = state.drivers.get(n)
@@ -475,9 +483,17 @@ def analyse(state, view, ctx, memory, cars: list[str], *, S: int | None = None, 
         if d.laps < 2:
             out[n] = CarAnalysis(n, False, "too early: no laps to read pace from")
             continue
-        if wet:
-            out[n] = CarAnalysis(n, False, "wet conditions: the simulator only models dry tyres")
-            continue
+        if wet:  # a rain flag alone (all cars still on slicks, race_dry) never leaves the dry planner
+            if wm.available and st["use_wet_engine"]:
+                a = wetobs.analyse_car(state, view, ctx, memory, wm, n,
+                                       force=bool(weather_r.get("wet_running")) or d.compound in ("INTERMEDIATE", "WET"))
+                if a is not None:
+                    out[n] = a
+                    continue
+                # rain flag up but the slicks run at dry pace: the dry planner stays in charge
+            else:
+                out[n] = CarAnalysis(n, False, "wet conditions: no wet-tyre model yet (too few wet laps in past races or no dry lap time for this circuit)")
+                continue
         by_anchor.setdefault(d.laps, []).append(n)
     for A, group in sorted(by_anchor.items()):
         t0 = time.perf_counter()
@@ -497,6 +513,8 @@ def analyse(state, view, ctx, memory, cars: list[str], *, S: int | None = None, 
             if a.ok and not light:
                 sc = sc_scenario(F, info, n, ctx, a.plan_a, min(st["S_B"], S), seed_for(ctx, "", 0, "sc"))
                 a.plan_b, a.plan_b_trigger, a.gain_sc, a.sc_best_comp = sc
+                if wm.available and st["use_wet_engine"]:
+                    a.rain_b = wetobs.rain_plan_b(state, view, ctx, wm, n)
             a.sc_prob5 = 1 - (1 - min(0.5, F.sc_rate + F.vsc_rate)) ** 5
             a.n_sims = S
             a.ms = (time.perf_counter() - t0) * 1000

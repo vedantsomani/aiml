@@ -89,8 +89,18 @@ def learn(final, meta: dict) -> dict:
             k = pass_bin(a1.lap_time - b1.lap_time)
             exp[k] += 1
             swp[k] += int(b1.position is not None and a1.position is not None and b1.position < a1.position)
-    return {"stints": stints, "sc": events["sc"], "vsc": events["vsc"], "laps": total,
-            "pass": [exp, swp], "circuit": meta.get("circuit_key")}
+    out = {"stints": stints, "sc": events["sc"], "vsc": events["vsc"], "laps": total,
+           "pass": [exp, swp], "circuit": meta.get("circuit_key")}
+    from .wetmodel import dry_reference, learn_wet
+
+    ref = dry_reference(final)
+    if ref is not None:  # circuit's dry pace for the wet model (added key; dry-race planning does not read it)
+        out["ref10"] = ref
+
+    wet = learn_wet(final, meta)
+    if wet:  # only races that used inters or wets (dry races' summaries are unchanged)
+        out["wet"] = wet
+    return out
 
 
 class Priors:

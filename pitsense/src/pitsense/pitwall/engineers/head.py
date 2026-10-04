@@ -7,7 +7,8 @@ The decision (see ``decide``):
 * PREPARE_BOX: the best plan stops within ``prep_laps`` laps.
 * BOX_IF_SC: no stop is due, but a safety car / VSC in the next 5 laps would make stopping worth at least
   ``gain_sc`` places (Plan B names the tyre).
-* STAY_OUT otherwise. NO_CALL when no plan could be made (wet race, too early); the reason says why.
+* STAY_OUT otherwise. NO_CALL when no plan could be made (too early, wet race without a wet-tyre model); the reason says why.
+* Wet or mixed race with a wet-tyre model: tyre-class calls (BOX for INTERS / SLICKS / WETS), see ``strategy/wethead.py``.
 
 Hysteresis: a call made on the previous lap is kept unless the evidence moves by more than the tolerance
 (a BOX stays BOX at twice the tolerance; PREPARE_BOX is not dropped to STAY_OUT until the plan's stop is 2
@@ -20,8 +21,9 @@ from __future__ import annotations
 import math
 
 from ..engineer import Engineer
-from ..types import Call, Plan, Reason
-from .strategy.analysis import SETTINGS
+from ..types import Call, Plan, PlanStop, Reason
+from .strategy import wethead
+from .strategy.analysis import SETTINGS, priors_for
 from .strategy.engineer import focus_cars, get_analysis, plan_text
 
 
@@ -146,6 +148,17 @@ class HeadOfStrategy(Engineer):
                 why = a.why if a is not None else "no plan"
                 out.append(Call(t=t, car=n, action="NO_CALL", reasons=(Reason("no_plan", why),)))
                 continue
+            if a.wet is not None:  # wet or mixed race: tyre-class calls from the wet simulator
+                pri = priors_for(self.ctx)
+                action, comp, cls, conf, rule = wethead.decide_wet(a, pri, self._last.get(n))
+                self._last[n] = action
+                pa, pb = wethead.plans(a, pri)
+                if d.laps < 8:
+                    conf *= 0.85
+                out.append(Call(t=t, car=n, action=action, compound=comp if action != "STAY_OUT" else None,
+                                confidence=round(conf, 2), reasons=tuple(wethead.reasons(a, action, cls, view, state)),
+                                plan_a=pa, plan_b=pb))
+                continue
             lap0, tgt0, before = self._hist.get(n, (None, None, None))
             prev_target = before if lap0 == d.laps else tgt0  # target stop lap decided on the previous lap
             action, comp, conf, rule, chosen = decide(a, prev_target, pit_open=rules.get("pit_lane_open") is not False,
@@ -165,7 +178,15 @@ class HeadOfStrategy(Engineer):
                 conf *= 0.85
             plan_a = chosen.to_plan("A")
             plan_b = None
-            if a.plan_b is not None:
+            if getattr(a, "rain_b", None) is not None:  # rain likely and the car is on slicks: the reaction to a shower
+                rb = a.rain_b
+                pri = priors_for(self.ctx)
+                stops = tuple(PlanStop(int(l), c if c != "SLICKS" else wethead.slick_compound(pri, max((state.total_laps or 60) - l, 1)))
+                              for l, c in rb.plan_b.switches[:1])
+                plan_b = Plan("B", stops, None, None, rb.plan_b_trigger)
+                p10 = weather.get("rain_prob_10min")
+                reasons.append(Reason("rain_plan_b", f"rain in 10 min {p10:.0%}: {rb.plan_b_trigger}", round(float(p10), 2)))
+            elif a.plan_b is not None:
                 plan_b = a.plan_b.to_plan("B", a.plan_b_trigger)
             elif a.ranked:
                 alt = next((r for r in a.ranked if r.stops != chosen.stops and r.first_offset != chosen.first_offset), None)
