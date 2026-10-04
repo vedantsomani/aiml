@@ -49,12 +49,12 @@ FEATURES = (
     "wet", "post_neutral", "frac",
 )
 NF = len(FEATURES)
-L2 = 3.0
+L2 = 5.0
 MIN_POSITIVES = 25  # below this many positives in earlier races, use DEFAULT_W
-CIRCUIT_BETA = 0.5  # weight of the circuit's log-odds shift
+CIRCUIT_BETA = 0.25  # weight of the circuit's log-odds shift
 CIRCUIT_SHRINK_LAPS = 120.0
 DEFAULT_RATE = {"sc": 0.0075, "vsc": 0.0045}  # starts per lap (all circuits, no history)
-ALERT_P = 0.20  # warn when P(SC or VSC within 2 laps) reaches this (tuned on 2025)
+ALERT_P = 0.08  # warn when P(SC or VSC within 2 laps) reaches this (tuned on 2025, see docs)
 BIG_LOSS_S = 5.0
 FEED_STOP_KMH = 8.0
 FEED_STOP_S = 6.0
@@ -64,7 +64,7 @@ DEFAULT_W = {
     "sc": [0.0] * NF,
     "vsc": [0.0] * NF,
 }
-for _k, _v in {"yellow_now": 0.6, "yellow_age": 0.4, "dy_active": 1.0, "dy_recent": 0.8, "stopped": 1.2,
+for _k, _v in {"yellow_now": 1.6, "yellow_age": 0.8, "y_active": 1.0, "y_recent": 0.8, "dy_active": 1.0, "dy_recent": 0.8, "stopped": 1.2,
                "offtrack": 0.4, "vehicle": 0.8, "incident": 0.5, "loss_max": 0.6, "lap1_chaos": 0.6,
                "post_neutral": 0.3, "wet": 0.4}.items():
     DEFAULT_W["sc"][FEATURES.index(_k)] = _v
@@ -254,8 +254,9 @@ def _logit(p: float) -> float:
     return math.log(p / (1 - p))
 
 
-def fit_logit(X: np.ndarray, y: np.ndarray, l2: float = L2, iters: int = 30) -> np.ndarray:
+def fit_logit(X: np.ndarray, y: np.ndarray, l2: float | None = None, iters: int = 30) -> np.ndarray:
     """L2-regularised logistic regression by Newton steps (deterministic). Returns [intercept, w...]."""
+    l2 = L2 if l2 is None else l2
     n, k = X.shape
     A = np.hstack([np.ones((n, 1)), X])
     w = np.zeros(k + 1)
@@ -565,7 +566,7 @@ class SafetyCarEngineer(Engineer):
             return []
         kind = "SC" if c["sc"] >= c["vsc"] else "VSC"
         since = self.tr.since(state.t)
-        return [Alert(state.t, self.name, "sc_likely", "critical" if c["any"] >= 2 * ALERT_P else "warn",
+        return [Alert(state.t, self.name, "sc_likely", "critical" if c["any"] >= 3 * ALERT_P else "warn",
                       f"{kind} likely in the next 1-2 laps ({c['any']:.0%}): {c['reason']}", since=since,
                       data={"sc_prob_2laps": round(c["sc"], 4), "vsc_prob_2laps": round(c["vsc"], 4)})]
 

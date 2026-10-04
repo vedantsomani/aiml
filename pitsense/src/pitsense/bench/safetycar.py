@@ -173,12 +173,89 @@ def warning_table(P: pd.DataFrame, col: str, theta: float, warn=None) -> dict:
             "warning_rows_share": float((P[col].to_numpy(float) >= theta).mean()) if warn is None else float(warn(P).mean())}
 
 
-def choose_theta(P: pd.DataFrame, col: str, max_fa_per_race: float = 1.0) -> float:
-    """Smallest threshold with at most ``max_fa_per_race`` false alarms per race (chosen on the selection year)."""
+def choose_theta(P: pd.DataFrame, col: str, max_fa_per_race: float = 1.0, max_rows_share: float = 0.05) -> float:
+    """Smallest threshold with at most ``max_fa_per_race`` false alarms per race and a warning up in at most
+    ``max_rows_share`` of the samples (chosen on the selection year)."""
     for th in np.round(np.arange(0.02, 0.9, 0.01), 2):
-        if warning_table(P, col, float(th))["false_alarms_per_race"] <= max_fa_per_race:
+        w = warning_table(P, col, float(th))
+        if w["false_alarms_per_race"] <= max_fa_per_race and w["warning_rows_share"] <= max_rows_share:
             return float(th)
     return 0.9
+
+
+# ----------------------------------------------------------------------------- continuous (live-like) replay
+def replay_race(slug: str, step: float = 10.0, feeds: bool = False) -> pd.DataFrame:
+    """The engineer's values every ``step`` s of race time (the pit wall asks every update, not only at lap ends).
+
+    Labels use the same rule as the lap-end task: an SC / VSC starts after t and before the leader has
+    completed two more laps. Rows while a neutralisation or red flag is on are left out.
+    """
+    from bisect import bisect_right
+
+    from .. import registry
+    from ..archive import downloaded_sessions
+    from ..config import bench_dir
+    from ..events import load_archive_session
+    from ..pitwall.engineer import Context
+    from ..pitwall.engineers.safetycar import SafetyCarEngineer
+    from ..pitwall.memory import RaceMemory
+    from ..pitwall.wall import PitWall
+    from ..state import replay
+    from . import history as H
+
+    ref = next(r for r in downloaded_sessions() if r.slug == slug and r.session_name == "Race")
+    hist = H.load(bench_dir() / "history.json")
+    prior = H.prior_for(hist, ref.circuit_key, ref.start_utc)
+    log = load_archive_session(ref.local_dir, feeds=feeds)
+    final = replay(log)
+    first: dict[int, float] = {}
+    for rec in final.laps:
+        if rec.lap not in first or rec.t_end < first[rec.lap]:
+            first[rec.lap] = rec.t_end
+    lap_t = [first[k] for k in sorted(first)]
+    starts = status_starts(list(final.status_log))
+    onsets = sorted(starts["sc"] + starts["vsc"])
+    ctx = Context.for_race(prior, log.meta, history=hist, race_start_utc=ref.start_utc)
+    wall = PitWall(ctx, RaceMemory(), [SafetyCarEngineer])
+    state = RaceState(log.meta)
+    out, nxt = [], None
+    events = log.events
+    for k, e in enumerate(events):
+        state.apply(e)
+        wall.observe(state)
+        if k + 1 < len(events) and events[k + 1].t <= e.t:
+            continue
+        if not state.started or state.finished_t is not None or state.t < (nxt if nxt is not None else -1):
+            continue
+        nxt = state.t + step
+        if state.track_status in NEUTRAL:
+            continue
+        v = wall.race_values(state)
+        i = bisect_right(lap_t, state.t)  # leader laps completed
+        t1 = lap_t[i + 1] if i + 1 < len(lap_t) else float("inf")
+        later = [s for s in onsets if state.t < s <= t1]
+        nxt_on = [s for s in onsets if s > state.t]
+        out.append({"race_id": slug, "t": state.t, "lap": i + 1, "y_sc_within_2": float(bool(later)),
+                    "y_next_onset_t": nxt_on[0] if nxt_on else float("nan"),
+                    "sc": v["safetycar__sc_prob_2laps"], "vsc": v["safetycar__vsc_prob_2laps"],
+                    "engineer": v["safetycar__neutral_prob_2laps"], "reason": v["safetycar__sc_reason"],
+                    "yellow": float(state.track_status == "2"), "feed_stopped": v["safetycar__feed_stopped"]})
+    return pd.DataFrame(out)
+
+
+def _replay_job(args):
+    return replay_race(*args)
+
+
+def continuous_year(year: int, step: float = 10.0, feeds: bool = False, jobs: int = 3) -> pd.DataFrame:
+    from concurrent.futures import ProcessPoolExecutor
+
+    from ..archive import downloaded_sessions
+
+    slugs = [r.slug for r in downloaded_sessions() if r.year == year and r.session_name == "Race"]
+    with ProcessPoolExecutor(jobs) as ex:
+        frames = list(ex.map(_replay_job, [(s, step, feeds) for s in slugs]))
+    return pd.concat(frames, ignore_index=True)
 
 
 # ----------------------------------------------------------------------------- report
@@ -202,9 +279,14 @@ def cmd_sc_report(a) -> None:
     warnings.filterwarnings("ignore")
     df = load_bench()
     sel = evaluate_year(df, a.select_year, a.min_train)
-    theta = a.theta if a.theta is not None else choose_theta(sel.predictions, "engineer", a.max_fa)
-    text = [f"Warning threshold on engineer P(SC or VSC within 2 laps): {theta:.2f} (alert default {ALERT_P:.2f}); "
-            f"chosen on {a.select_year} as the smallest with <= {a.max_fa} false alarms per race.\n"]
+    sel_c = continuous_year(a.select_year, a.step, False, a.jobs) if a.continuous else None
+    if a.theta is not None:
+        theta, how = a.theta, "given"
+    elif sel_c is not None:
+        theta, how = choose_theta(sel_c, "engineer", a.max_fa), f"chosen on the {a.select_year} live-like replay: smallest with <= {a.max_fa} false alarms per race and a warning up in <= 5 % of samples"
+    else:
+        theta, how = ALERT_P, "the engineer's alert default"
+    text = [f"Warning threshold on engineer P(SC or VSC within 2 laps): {theta:.2f} ({how}; alert default {ALERT_P:.2f}).\n"]
     for year in [a.select_year] + [y for y in a.test_years if y != a.select_year]:
         res = sel if year == a.select_year else evaluate_year(df, year, a.min_train)
         P = res.predictions
@@ -229,11 +311,37 @@ def cmd_sc_report(a) -> None:
             ok = 0 < yk.sum() < len(yk)
             text.append(f"{kind}: positives {int(yk.sum())}, AUC of its own probability {roc_auc_score(yk, pk) if ok else float('nan'):.3f}, "
                         f"mean predicted {pk.mean():.4f} vs observed {yk.mean():.4f}\n")
+    if a.continuous:
+        text.append(continuous_section(a, a.select_year, a.test_years, sel_c, theta))
     out = "\n".join(text)
     print(out)
     if a.out:
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)
         Path(a.out).write_text(out, encoding="utf-8")
+
+
+def continuous_section(a, select_year: int, test_years: list[int], sel: pd.DataFrame, th: float) -> str:
+    """Live-like scoring: the engineer asked every ``--step`` s. Threshold chosen on the selection year."""
+    from .metrics import binary_scores
+
+    text = [f"## Live-like replay (engineer asked every {a.step:.0f} s of race time)\n",
+            f"Warning threshold on P(SC or VSC within 2 laps): {th:.2f}.\n"]
+    for year in [select_year] + [y for y in test_years if y != select_year]:
+        for feeds in ((False, True) if (a.feeds and year >= 2025) else (False,)):
+            P = sel if (year == select_year and not feeds) else continuous_year(year, a.step, feeds, a.jobs)
+            y = P.y_sc_within_2.to_numpy(float)
+            sc = binary_scores(y, P.engineer.to_numpy(float))
+            rows = [{"warning": "engineer", "theta": th, **warning_table(P, "engineer", th)},
+                    {"warning": "rule: status 2 (yellow)", "theta": 0.5, **warning_table(P, "yellow", 0.5)}]
+            label = " with telemetry / position feeds" if feeds else ""
+            text.append(f"### {year}{label}: {P.race_id.nunique()} races, {len(P)} samples, {int(y.sum())} positive; "
+                        f"log loss {sc['log_loss']:.4f}, Brier {sc['brier']:.4f}, AUC {sc['auc']:.3f}\n")
+            text.append(_md(pd.DataFrame(rows).round(3)) + "\n")
+            if feeds:
+                st = P[P.feed_stopped > 0]
+                text.append(f"Rows with a car stopped on track (telemetry): {len(st)}, "
+                            f"positive share {st.y_sc_within_2.mean() if len(st) else float('nan'):.3f}\n")
+    return "\n".join(text)
 
 
 def add_commands(sub) -> None:
@@ -243,5 +351,9 @@ def add_commands(sub) -> None:
     s.add_argument("--theta", type=float, help="warning threshold (default: chosen on the selection year)")
     s.add_argument("--max-fa", type=float, default=1.0, help="false alarms per race allowed when choosing the threshold")
     s.add_argument("--min-train", type=int, default=10)
+    s.add_argument("--continuous", action="store_true", help="also score the engineer asked every --step seconds (live-like)")
+    s.add_argument("--step", type=float, default=10.0)
+    s.add_argument("--feeds", action="store_true", help="also replay 2025-26 with telemetry / position feeds loaded")
+    s.add_argument("--jobs", type=int, default=3)
     s.add_argument("--out", help="markdown file to write")
     s.set_defaults(fn=cmd_sc_report)
