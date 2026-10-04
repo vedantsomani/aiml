@@ -51,8 +51,9 @@ _P: list[tuple[str, float, re.Pattern]] = [(i, w, re.compile(p)) for i, w, p in 
     ("box", 0.75, r"\b(?:we(?:'re| are| will|'ll)|let's|going to|gonna|we) (?:be )?(?:box|boxing|pit|pitting)\b"),
     ("box", 0.7, r"\b(?:box|pit|boxing|pitting) (?:next lap|at the end of (?:this|the) lap|in (?:one|two|three|\d) laps?|end of lap|on entry)\b"),
     ("box", 0.7, r"\b(?:going to|gonna|planning to|plan to|will) (?:box|pit)\b"),
-    ("box", 0.5, r"\bbox\b"),
-    ("extend", 0.9, r"\bstay out\b|\bstaying out\b|\bstay on (?:track|the track)\b"),
+    ("box", 0.35, r"\bbox to overtake\b"),
+    ("box", 0.5, r"\bbox\b(?! to overtake)"),
+    ("extend", 0.9, r"\bstay out\b(?! of)|\bstaying out\b|\bstay on (?:track|the track)\b"),
     ("extend", 0.8, r"\bextend\w*\b|\bgo(?:ing)? long\b"),
     ("extend", 0.7, r"\b(?:leave|leaving|left) (?:you |him )?out\b|\bkeep(?:ing)? you out\b|\bno stop\b"),
     ("extend", 0.5, r"\b(?:to|until) the (?:end|flag)\b|\bone[- ]stop(?:per)?\b"),
@@ -76,7 +77,7 @@ _P: list[tuple[str, float, re.Pattern]] = [(i, w, re.compile(p)) for i, w, p in 
 _NEG_BEFORE = re.compile(
     r"\b(?:don't|do not|dont|doesn't|didn't|did not|won't|will not|wouldn't|can't|cannot|not|never|no need to|no|without|nothing)\s+(?:\w+\s+){0,2}$"
     r"|\bnot (?:going to|gonna|planning to)\s*$")
-_HYPO = re.compile(r"\b(?:if|in case|what if|unless)\b[^,.;]{0,30}$")
+_HYPO = re.compile(r"\b(?:if|in case|what if|unless)\b[^,.;]{0,45}$|\b(?:would|could|might|may|should)\s+(?:\w+\s+)?$")
 _QUESTION_START = re.compile(r"^(?:so |and |ok(?:ay)?,? |right,? )?(?:should|shall|do you|do we|did you|did we|are you|are we|can we|can you|could we|could you|would you|why|how|what|when|any)\b")
 _SPLIT = re.compile(r"(?<=[.!?])\s+")
 _RED_BOX = re.compile(r"\bred box\b|\bbox (?:is|was|has|had)\b")
@@ -102,7 +103,7 @@ def classify(text: str | None) -> dict[str, tuple[float, str]]:
         q = 0.35 if question else 1.0
         for intent, w, pat in _P:
             for m in pat.finditer(low):
-                before = low[max(0, m.start() - 28):m.start()]
+                before = low[max(0, m.start() - 50):m.start()]
                 if intent == "box" and _RED_BOX.search(low[max(0, m.start() - 4):m.end() + 6]):
                     continue
                 neg = bool(_NEG_BEFORE.search(before))
@@ -131,7 +132,7 @@ def _decay(intent: str, dt: float) -> float:
 
 class RivalRadio(Engineer):
     name = "rivalradio"
-    requires = ("rivals",)
+    requires = ()  # alerts use the rivals engineer's gaps when it is on the wall
     features = ("rr_box_intent", "rr_extend", "rr_push", "rr_save", "rr_tyres_gone", "rr_planchange",
                 "rr_cover", "rr_weather", "rr_problem", "rr_n", "rr_age_s")
     in_bench = True
@@ -221,7 +222,10 @@ class RivalRadio(Engineer):
     def _relation(self, state, view, focus: list[str], n: str) -> str:
         best = None
         for f in focus:
-            r = view.car("rivals", f)
+            try:
+                r = view.car("rivals", f)
+            except KeyError:
+                r = {}
             who = "you" if len(focus) == 1 else (state.drivers[f].tla or f)
             if r.get("ahead") == n and r.get("gap_ahead") is not None:
                 cand = (r["gap_ahead"], f"he's {r['gap_ahead']:.1f} s ahead of {who}")
