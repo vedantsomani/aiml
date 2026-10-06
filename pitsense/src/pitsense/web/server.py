@@ -5,6 +5,8 @@
     GET /api/calls         {"current": [...], "log": [...]}
     GET /api/alerts        {"active": [...], "log": [...]}
     GET /api/health        loop status, throughput, snapshot latency, model bundle
+    GET /api/replay/marks  replay controls state and bookmarks (calls, stops, SC/VSC, rain, mechanic alerts); enabled=false when live
+    POST /api/replay/pause|resume|speed|seek   {} | {} | {"speed": 1|5|20|"max"} | {"lap": N} or {"mark": id}; 409 in live mode
     GET /api/stream        server-sent events: "snapshot" (the snapshot JSON), "pos" (car positions, ~3 Hz), "status"
     GET /api/radio.wav     ?car=N[&i=ID]: our pit wall's message (latest, or by id), spoken (Piper TTS; 404 if not installed)
     GET /api/teamradio     ?car=N&i=K: the K-th real driver radio mp3 of car N (published clips only, audio/mpeg)
@@ -12,7 +14,8 @@
                            conversation and the answer can be spoken via /api/radio.wav?car=N&i=<reply id>
     POST /api/ask_audio    ?car=N, body = recorded audio (webm/opus, ogg, wav): transcribed on the server, then as /api/ask
 
-The GET endpoints are read-only; the two POSTs only add a question and its answer to the conversation. Binds to
+The GET endpoints are read-only; the ask POSTs only add a question and its answer to the conversation; the replay
+POSTs move a replay (never a live session). Binds to
 127.0.0.1 unless told otherwise; a POST from a page on another origin is refused.
 
 Many browsers may watch at once: each SSE client has its own thread and a bounded queue (a slow one loses its oldest
@@ -36,6 +39,7 @@ MAX_BODY = 8_000_000  # bytes: a question is a sentence; a recording a few secon
 WRITE_TIMEOUT_S = 8.0  # a viewer that accepts no data for this long is dropped
 MAX_VIEWERS = 64
 COOKIE = "pitsense_token"
+REPLAY_POSTS = ("/api/replay/pause", "/api/replay/resume", "/api/replay/speed", "/api/replay/seek")
 PAGES = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
 
 
@@ -124,6 +128,24 @@ def _handler(rt, token: str | None = None, max_viewers: int = MAX_VIEWERS):
                 return None
             return self.rfile.read(int(n))
 
+        def _replay(self, path: str, body: bytes) -> None:
+            try:
+                req = json.loads(body.decode("utf-8") or "{}")
+                if not isinstance(req, dict):
+                    raise ValueError
+            except ValueError:
+                return self._json({"ok": False, "error": "body must be a JSON object"}, 400)
+            if path.endswith("/pause"):
+                out = rt.replay_pause()
+            elif path.endswith("/resume"):
+                out = rt.replay_resume()
+            elif path.endswith("/speed"):
+                out = rt.replay_speed(req.get("speed"))
+            else:
+                out = rt.replay_seek(lap=req.get("lap"), mark=req.get("mark"))
+            err = out.get("error", "")
+            self._json(out, 200 if out.get("ok") else 409 if "disabled" in err else 422)
+
         def do_POST(self) -> None:  # noqa: N802
             from urllib.parse import parse_qs
 
@@ -131,13 +153,15 @@ def _handler(rt, token: str | None = None, max_viewers: int = MAX_VIEWERS):
             try:
                 if not self._authorised():
                     return self._deny()
-                if path not in ("/api/ask", "/api/ask_audio"):
+                if path not in ("/api/ask", "/api/ask_audio") and path not in REPLAY_POSTS:
                     return self._json({"error": "not found"}, 404)
                 if not self._same_origin():
                     return self._json({"ok": False, "error": "cross-origin request refused"}, 403)
                 body = self._body()
                 if body is None:
                     return
+                if path in REPLAY_POSTS:
+                    return self._replay(path, body)
                 if path == "/api/ask":
                     try:
                         req = json.loads(body.decode("utf-8") or "{}")
@@ -170,6 +194,8 @@ def _handler(rt, token: str | None = None, max_viewers: int = MAX_VIEWERS):
                     self._json(rt.alerts())
                 elif path == "/api/health":
                     self._json(rt.health())
+                elif path == "/api/replay/marks":
+                    self._json(rt.replay_marks())
                 elif path == "/api/stream":
                     self._stream()
                 elif path == "/api/radio.wav":

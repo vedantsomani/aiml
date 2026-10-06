@@ -638,3 +638,93 @@ if (window.EventSource) {
 // the sticky call banner sits right under the (variable height) sticky header
 function fitBars() { document.documentElement.style.setProperty("--hh", document.querySelector("header").offsetHeight + "px"); }
 window.addEventListener("resize", fitBars); fitBars();
+
+// ---- health alarms: a red bar listing them, green when clear
+// alarms:begin
+function alarmView(alarms) {
+  const MAP = {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"};
+  const e = (x) => String(x == null ? "" : x).replace(/[&<>"']/g, (c) => MAP[c]);
+  if (!alarms || !alarms.length) return {cls: "green", html: "<b>HEALTH</b> No alarms"};
+  return {cls: "red", html: "<b>" + alarms.length + (alarms.length === 1 ? " ALARM" : " ALARMS") + "</b><ul>" +
+    alarms.map((a) => "<li>" + e(a) + "</li>").join("") + "</ul>"};
+}
+// alarms:end
+function pollHealth() {
+  const bar = $("alarmbar");
+  fetch("/api/health").then((r) => r.json()).then((h) => {
+    const v = alarmView(h.alarms);
+    bar.className = "alarmbar " + v.cls;
+    bar.innerHTML = v.html;
+    fitBars();
+  }).catch(() => {
+    bar.className = "alarmbar red";
+    bar.innerHTML = "<b>1 ALARM</b><ul><li>RED: the pit wall server does not answer</li></ul>";
+    fitBars();
+  });
+}
+pollHealth(); setInterval(pollHealth, 3000);
+
+// ---- replay lab: pause, speed, lap slider, jump, bookmarks on a timeline
+let rmarks = null, rbBusy = false;
+const MARK_TOP = {call: 3, pit: 12, mechanic: 21};
+function replayPost(path, body) {
+  return fetch("/api/replay/" + path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})})
+    .then((r) => r.json()).catch(() => ({ok: false, error: "no answer"}));
+}
+function drawTimeline(m) {
+  const tl = $("timeline"), total = m.total_laps || Math.max(m.lap, 1);
+  tl.querySelectorAll(".tl-mark").forEach((n) => n.remove());
+  for (const k of m.marks) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "tl-mark " + k.kind + (k.ahead ? " ahead" : "");
+    b.title = "lap " + k.lap + "  " + k.label;
+    b.dataset.id = k.id;
+    b.style.left = Math.min(100, (k.lap / total) * 100) + "%";
+    b.style.top = (MARK_TOP[k.kind] != null ? MARK_TOP[k.kind] : 12) + "px";
+    tl.appendChild(b);
+  }
+  $("tl-cur").style.left = Math.min(100, (m.lap / total) * 100) + "%";
+}
+function renderReplay(m) {
+  $("replaybar").hidden = !m.enabled;
+  if (!m.enabled) return;
+  rmarks = m;
+  const pb = $("rb-pause");
+  pb.textContent = m.paused ? "Resume" : "Pause";
+  pb.classList.toggle("on", m.paused);
+  document.querySelectorAll("#rb-speeds button").forEach((b) => b.classList.toggle("on", (b.dataset.speed === "max" ? 0 : +b.dataset.speed) === m.speed));
+  const sl = $("rb-lap");
+  sl.max = m.total_laps || Math.max(m.lap, 1);
+  if (document.activeElement !== sl) sl.value = m.lap;
+  $("rb-num").max = sl.max;
+  drawTimeline(m);
+  if (!rbBusy) $("rb-note").textContent = "lap " + m.lap + " / " + (m.total_laps || "?") + (m.index_done ? "  | every lap ready" : "  | ready to lap " + m.indexed_lap);
+  fitBars();
+}
+function pollReplay() {
+  fetch("/api/replay/marks").then((r) => r.json()).then(renderReplay).catch(() => {});
+}
+function seekTo(body) {
+  rbBusy = true;
+  $("rb-note").textContent = "jumping...";
+  replayPost("seek", body).then((r) => {
+    rbBusy = false;
+    $("rb-note").textContent = r.ok ? "jumped to lap " + r.lap + " in " + r.ms + " ms (" + r.via + ")" : "jump failed: " + (r.error || "");
+    pollReplay();
+  });
+}
+$("rb-pause").addEventListener("click", () => replayPost(rmarks && rmarks.paused ? "resume" : "pause").then(pollReplay));
+$("rb-speeds").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) replayPost("speed", {speed: b.dataset.speed}).then(pollReplay); });
+$("rb-lap").addEventListener("change", (e) => seekTo({lap: +e.target.value}));
+$("rb-go").addEventListener("click", () => seekTo({lap: +$("rb-num").value}));
+$("rb-num").addEventListener("keydown", (e) => { if (e.key === "Enter") seekTo({lap: +e.target.value}); });
+$("timeline").addEventListener("click", (e) => {
+  const b = e.target.closest(".tl-mark");
+  if (b) seekTo({mark: b.dataset.id});
+  else if (rmarks) {
+    const r = $("timeline").getBoundingClientRect();
+    seekTo({lap: Math.round(((e.clientX - r.left) / r.width) * (rmarks.total_laps || rmarks.lap))});
+  }
+});
+pollReplay(); setInterval(pollReplay, 4000);

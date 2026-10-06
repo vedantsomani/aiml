@@ -33,6 +33,7 @@ from pathlib import Path
 from .. import events as _events  # the feeder: reads the log; exempt by name in tests/test_pitwall.py
 from ..config import FEED_TOPICS
 from ..state import RaceState
+from . import replay as _replay
 from .types import Snapshot, TeamConfig
 
 log = logging.getLogger("pitsense.pitwall")
@@ -64,33 +65,75 @@ class Source:
 
 
 class ReplaySource(Source):
-    """An EventLog replayed against the wall clock at ``speed`` x (0 = as fast as possible)."""
+    """An EventLog replayed against the wall clock at ``speed`` x (0 = as fast as possible).
+
+    Controllable while it runs: :meth:`pause`, :meth:`resume`, :meth:`set_speed` take effect before the next
+    event; a seek is a :class:`Control` the runtime loop executes (it alone writes state), after which
+    :meth:`jump` moves the read position. ``pos`` is the number of events handed out.
+    """
 
     mode = "replay"
+    seekable = True
 
     def __init__(self, log_: _events.EventLog, speed: float = 1.0, *, ref=None, title: str = "", start_utc=None) -> None:
         self.log, self.speed, self.ref = log_, float(speed), ref
         self.meta = dict(log_.meta)
         self.title = title or (ref.slug if ref else "replay")
         self.start_utc = start_utc if start_utc is not None else (ref.start_utc if ref else None)
+        self.pos = 0
+        self.paused = False
+        self._ctl: deque = deque()
+        self._anchor: tuple[float, float] | None = None  # (wall time, session time) the pacing is measured from
+        self._t_pace = log_.start  # pacing begins here (LEAD_IN_S before the lights)
+        for e in log_.events:
+            if e.topic == "SessionStatus" and isinstance(e.data, dict) and e.data.get("Status") == "Started":
+                self._t_pace = max(log_.start, e.t - LEAD_IN_S)
+                break
+
+    # --- controls (any thread)
+    def _reanchor(self) -> None:
+        self._anchor = None  # the loop re-anchors at the next event
+
+    def pause(self) -> None:
+        self.paused = True
+
+    def resume(self) -> None:
+        self.paused = False
+        self._reanchor()
+
+    def set_speed(self, speed: float) -> None:
+        self.speed = float(speed)
+        self._reanchor()
+
+    def request(self, ctl: Control) -> Control:
+        self._ctl.append(ctl)
+        return ctl
+
+    def jump(self, pos: int) -> None:
+        self.pos = max(0, min(int(pos), len(self.log.events)))
+        self._reanchor()
 
     def events(self, stop: threading.Event):
-        # the grid wait before the start is not paced: pacing begins LEAD_IN_S before the lights
-        t0 = self.log.start
-        for e in self.log.events:
-            if e.topic == "SessionStatus" and isinstance(e.data, dict) and e.data.get("Status") == "Started":
-                t0 = max(t0, e.t - LEAD_IN_S)
-                break
-        t0_wall = time.monotonic()
-        for e in self.log.events:
-            if stop.is_set():
+        evs = self.log.events
+        while not stop.is_set():
+            if self._ctl:
+                yield self._ctl.popleft()
+                continue
+            if self.paused:
+                time.sleep(0.03)
+                continue
+            if self.pos >= len(evs):
                 return
-            if self.speed > 0 and e.t > t0:
-                while not stop.is_set():
-                    delay = t0_wall + (e.t - t0) / self.speed - time.monotonic()
-                    if delay <= 0:
-                        break
-                    time.sleep(min(delay, 0.2))
+            e = evs[self.pos]
+            if self.speed > 0 and e.t > self._t_pace:
+                if self._anchor is None:
+                    self._anchor = (time.monotonic(), max(e.t, self._t_pace))
+                aw, at = self._anchor
+                delay = aw + (e.t - at) / self.speed - time.monotonic()
+                if delay > 0:
+                    time.sleep(min(delay, 0.05))
+                    continue  # re-check controls, pause and speed
+            self.pos += 1
             yield e
 
 
@@ -226,7 +269,9 @@ class PitWallRuntime:
 
     def __init__(self, source: Source, *, team: TeamConfig | None = None, log_dir: Path | None = None,
                  models: bool | object = True, history=None, publish_every_s: float | None = None,
-                 engineers=None, track: dict | None = None) -> None:
+                 engineers=None, track: dict | None = None, checkpoint_every: int = 1,
+                 index: bool = False, replay_index: "_replay.ReplayIndex | None" = None,
+                 indexer: bool = False) -> None:
         self.source = source
         self.team = team or TeamConfig()
         self.log_dir = Path(log_dir) if log_dir else None
@@ -288,6 +333,16 @@ class PitWallRuntime:
         self._seen_alerts: set[tuple] = set()
         self._last_alarms: list[str] = []  # track previous alarms to detect changes
         self._wall_t0 = time.time()
+        self._prev_lap = -1  # leader lap at the previous event (lap changes get a checkpoint)
+        self._silent = indexer  # catching up after a jump (or indexing): no listeners, no call-log file
+        self._hwm = 0  # events whose calls/alerts are already in the call-log file (a replayed jump adds none)
+        self._is_indexer = indexer
+        self._want_index = index
+        self._helpers_started = False
+        self._indexer_rt: "PitWallRuntime | None" = None
+        self.replay_index = replay_index
+        if self.replay_index is None and getattr(source, "seekable", False):
+            self.replay_index = _replay.ReplayIndex(checkpoint_every)
         self._log_fh = None
         self.log_path: Path | None = None
         if self.log_dir:
@@ -372,9 +427,13 @@ class PitWallRuntime:
     def run(self) -> None:
         try:
             self.status = "running"
+            self._start_helpers()
             for e in self.source.events(self.stop_event):
+                if isinstance(e, _replay.Control):
+                    self._control(e)
+                    continue
                 if self.wall is None:
-                    self._build_wall()
+                    self._ensure_wall()
                 self.handle(e)
             if self.wall is not None:
                 with self.sim_lock:
@@ -386,11 +445,21 @@ class PitWallRuntime:
         finally:
             if self._log_fh:
                 self._log_fh.flush()
+            if self._is_indexer and self.replay_index is not None:
+                self.replay_index.done = self.status == "finished"
+                self.replay_index.error = self.error
             self._notify({"event": "status", "status": self.status})
 
     def handle(self, e: _events.Event) -> None:
         with self.sim_lock:
             self._handle(e)
+            self._hwm = max(self._hwm, self.n_events)
+            lap = self.state.current_lap
+            if lap != self._prev_lap:
+                prev, self._prev_lap = self._prev_lap, lap
+                ix = self.replay_index
+                if ix is not None and self.wall is not None and ix.wanted(lap, prev):
+                    self._checkpoint(prev)
 
     def _handle(self, e: _events.Event) -> None:
         state = self.state
@@ -425,6 +494,203 @@ class PitWallRuntime:
         due = self._last_pub_t is None or state.t - self._last_pub_t >= self.publish_every_s
         if due or lap_changed:
             self.publish()
+
+    # --------------------------------------------------------------- replay lab
+    def _ensure_wall(self) -> None:
+        self._build_wall()
+        ix = self.replay_index
+        if ix is not None and 0 not in ix.checkpoints and not ix.disabled:
+            self._prev_lap = self.state.current_lap
+            self._checkpoint(-1)  # the start of the race: where a jump to lap 0 or a replay from scratch begins
+
+    def _checkpoint(self, prev_lap: int) -> None:
+        ix = self.replay_index
+        try:
+            payload = _replay.capture(self)
+        except Exception:
+            log.exception("checkpoint failed; jumps will replay from the start")
+            ix.disabled = True
+            return
+        ix.add(_replay.Checkpoint(self.n_events, self.state.current_lap, prev_lap, self.state.t, payload))
+        if self._is_indexer:
+            ix.indexed_idx, ix.indexed_lap = self.n_events, self.state.current_lap
+
+    def _start_helpers(self) -> None:
+        """Once: the bookmark scan (timing only, seconds) and, if asked, the background indexing pass."""
+        if self._helpers_started or self._is_indexer or self.replay_index is None:
+            return
+        self._helpers_started = True
+        src = self.source
+        ix = self.replay_index
+        threading.Thread(target=lambda: _replay.scan_marks(src.log, ix), name="pitsense-marks", daemon=True).start()
+        if self._want_index:
+            sub = ReplaySource(src.log, 0, ref=src.ref, title=src.title, start_utc=src.start_utc)
+            self._indexer_rt = PitWallRuntime(sub, team=self.team, models=self.use_models, history=self.history,
+                                              publish_every_s=self.publish_every_s, engineers=self.engineers,
+                                              replay_index=ix, indexer=True)
+            self._indexer_rt.start()
+
+    def _control(self, ctl: "_replay.Control") -> None:
+        ctl.taken = True
+        try:
+            if ctl.kind == "seek":
+                ctl.result = self._seek_exec(int(ctl.args["lap"]))
+            else:
+                ctl.result = {"ok": False, "error": f"unknown command {ctl.kind}"}
+        except Exception as exc:
+            log.exception("replay command failed")
+            ctl.result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        finally:
+            self._silent = self._is_indexer
+            ctl.done.set()
+
+    def _seek_exec(self, lap: int) -> dict:
+        """Put the race at the first event where the leader is on lap >= ``lap`` (runs in the loop thread).
+
+        A saved copy of state and engineers taken at exactly that event is restored if there is one; otherwise
+        the nearest earlier copy (or the start, or the present if it is earlier) is restored and the log played
+        forward silently through the normal handler until that event. Nothing after it is ever applied.
+        """
+        t0 = time.perf_counter()
+        src, ix = self.source, self.replay_index
+        lap = max(0, lap)
+        with self.sim_lock:
+            if self.wall is None:
+                self._ensure_wall()
+            evs = src.log.events
+            ck = ix.first_at_or_after(lap)
+            via, replayed = "checkpoint", 0
+            if ck is not None:
+                _replay.restore(self, ck.payload)
+            else:
+                start = ix.before(lap)
+                if start is None:
+                    start = ix.checkpoints.get(0)
+                if start is None:  # copies are off (a deep copy failed): rebuild from nothing
+                    self._reset_fresh()
+                elif not (self.state.current_lap < lap and self.n_events >= start.idx):
+                    _replay.restore(self, start.payload)
+                via = "replay"
+                self._silent = True
+                while self.state.current_lap < lap and self.n_events < len(evs):
+                    self.handle(evs[self.n_events])
+                    replayed += 1
+                self._silent = self._is_indexer
+            src.jump(self.n_events)
+            self._prev_lap = self.state.current_lap
+            self.last_event_wall = time.time()
+            d = self.latest
+            if d is not None:
+                d["extra"]["wall_time"] = time.time()
+                d["extra"]["speed"] = src.speed
+                self.latest_bytes = _json_bytes(d)
+                self._notify({"event": "snapshot", "data": self.latest_bytes})
+            res = {"ok": True, "requested": lap, "lap": self.state.current_lap, "t": round(self.state.t, 1),
+                   "events": self.n_events, "via": via, "events_replayed": replayed,
+                   "clamped": self.state.current_lap < lap, "ms": round((time.perf_counter() - t0) * 1000)}
+        self._notify({"event": "status", "status": self.status, "seek": res})
+        return res
+
+    def _reset_fresh(self) -> None:
+        """Back to the state before the first event (used only when checkpoints are unavailable)."""
+        keep = self.calls_log.maxlen
+        self.state = RaceState(self.source.meta)
+        self.session_info, self.calls_log, self.alerts_log = {}, deque(maxlen=keep), deque(maxlen=keep)
+        self.inferred_order = self._feed_positions = False
+        self.observe_errors = self.snapshot_errors = self.n_events = self.n_snapshots = 0
+        self._last_pub_t, self._last_pub_lap, self._last_calls = None, -1, {}
+        self.radio, self.wall_msgs, self._wall_id = {}, deque(maxlen=WALL_KEEP), 0
+        self._radio_lap, self._radio_list, self._radio_sig, self._seen_alerts = {}, [], (), set()
+        self.positions, self._pos_t, self._prev_lap = {}, None, 0
+        self.latest, self.latest_bytes = None, _json_bytes({"waiting": True})
+        self._wall_quali = False
+        self._build_wall()
+
+    # --- the public controls (any thread)
+    def _replay_ok(self) -> str | None:
+        if not getattr(self.source, "seekable", False):
+            return f"{self.source.mode} mode: replay controls are disabled"
+        return None
+
+    def replay_pause(self) -> dict:
+        err = self._replay_ok()
+        if err:
+            return {"ok": False, "error": err}
+        self.source.pause()
+        return {"ok": True, **self.replay_status()}
+
+    def replay_resume(self) -> dict:
+        err = self._replay_ok()
+        if err:
+            return {"ok": False, "error": err}
+        self.source.resume()
+        return {"ok": True, **self.replay_status()}
+
+    def replay_speed(self, speed) -> dict:
+        err = self._replay_ok()
+        if err:
+            return {"ok": False, "error": err}
+        try:
+            v = 0.0 if str(speed).lower() == "max" else float(speed)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "speed must be a number or 'max'"}
+        if not (0 <= v <= 1000):
+            return {"ok": False, "error": "speed must be between 0 (max) and 1000"}
+        self.source.set_speed(v)
+        return {"ok": True, **self.replay_status()}
+
+    def replay_seek(self, lap=None, mark: str | None = None, timeout: float = 600.0) -> dict:
+        """Jump to a lap (or to the lap of a bookmark). Blocks until the jump is done; returns timing."""
+        err = self._replay_ok()
+        if err:
+            return {"ok": False, "error": err}
+        if mark is not None:
+            m = self.replay_index.marks.get(str(mark))
+            if m is None:
+                return {"ok": False, "error": "no such bookmark"}
+            lap = m["lap"]
+        try:
+            lap = int(lap)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "give {lap: N} or {mark: id}"}
+        if lap < 0 or lap > 1000:
+            return {"ok": False, "error": "lap out of range"}
+        ctl = _replay.Control("seek", lap=lap)
+        if self.thread is not None and self.thread.is_alive():
+            self.source.request(ctl)
+            end = time.monotonic() + timeout
+            while not ctl.done.wait(0.05):
+                if not self.thread.is_alive() and not ctl.taken:  # the loop ended just now: do it here
+                    try:
+                        self.source._ctl.remove(ctl)
+                    except ValueError:
+                        pass
+                    break
+                if time.monotonic() > end:
+                    return {"ok": False, "error": "jump timed out"}
+        if not ctl.done.is_set():
+            self._control(ctl)
+            if self.thread is not None and not self.thread.is_alive() and not self.stop_event.is_set():
+                self.start()  # a finished replay plays on from the new place
+        return ctl.result or {"ok": False, "error": "jump failed"}
+
+    def replay_status(self) -> dict:
+        src, ix = self.source, self.replay_index
+        if not getattr(src, "seekable", False) or ix is None:
+            return {"enabled": False, "mode": src.mode, "reason": self._replay_ok()}
+        return {"enabled": True, "mode": src.mode, "paused": src.paused, "speed": src.speed,
+                "lap": self.state.current_lap, "total_laps": self.state.total_laps, "t": round(self.state.t, 1),
+                "pos": src.pos, "n_events": len(src.log.events), "checkpoints": ix.laps(),
+                "indexed_lap": ix.indexed_lap, "index_done": ix.done, "index_error": ix.error,
+                "copies": not ix.disabled}
+
+    def replay_marks(self) -> dict:
+        out = self.replay_status()
+        if not out["enabled"]:
+            return {**out, "marks": []}
+        t = self.state.t
+        out["marks"] = [{**m, "ahead": m["t"] > t} for m in self.replay_index.mark_list()]
+        return out
 
     # --------------------------------------------------------------- publishing
     def publish(self, force: bool = False) -> dict | None:
@@ -550,6 +816,8 @@ class PitWallRuntime:
     def _maybe_push_positions(self) -> None:
         """A light "pos" event: car positions (and radio changes) between snapshots, about 3 Hz on the wall clock."""
         state, now = self.state, time.monotonic()
+        if self._silent:
+            return
         if self._pos_t is not None and (state.t - self._pos_t < POS_EVERY_S or now - self._pos_wall < POS_MIN_WALL_S):
             return
         self._pos_t, self._pos_wall = state.t, now
@@ -640,7 +908,12 @@ class PitWallRuntime:
 
     def _record(self, rec: dict, mem: deque) -> None:
         mem.append(rec)
-        if self._log_fh:
+        if self.replay_index is not None:
+            try:
+                _replay.marks_from_record(self.replay_index, rec, self.team.focus(self.state), self.state)
+            except Exception:
+                log.exception("bookmark failed")
+        if self._log_fh and self.n_events > self._hwm:
             self._log_fh.write(json.dumps(rec, separators=(",", ":"), default=str) + "\n")
             self._log_fh.flush()
 
@@ -657,6 +930,8 @@ class PitWallRuntime:
                 self.listeners.remove(q)
 
     def _notify(self, msg: dict) -> None:
+        if self._silent:
+            return
         with self.lock:
             targets = list(self.listeners)
         for q in targets:
@@ -684,7 +959,8 @@ class PitWallRuntime:
         if self.use_models is True and not self.model_info.get("loaded"):
             alarms.append("RED: Model bundle requested but not loaded")
 
-        if last_event_age is not None and last_event_age > 30:
+        quiet = getattr(self.source, "paused", False) or self.status in ("finished", "stopped")  # nothing is due
+        if last_event_age is not None and last_event_age > 30 and not quiet:
             alarms.append(f"RED: Feed stale for {last_event_age:.0f}s (>30s)")
 
         if self.observe_errors > 0:
@@ -726,6 +1002,7 @@ class PitWallRuntime:
             "radio": None if self.radio_worker is None else dict(self.radio_worker.stats, error=self.radio_worker.error),
             "track": None if self.track is None else ("provisional" if self.track.get("provisional") else "stored"),
             "alarms": alarms,
+            "replay": self.replay_status(),
         }
 
     def team_radio_file(self, car: str, i: int) -> Path | None:

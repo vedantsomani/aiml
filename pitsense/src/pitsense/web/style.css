@@ -151,3 +151,28 @@ main>*,aside>*{min-width:0}
   .tabs button{flex:1;min-height:56px;font:inherit;font-size:13px;font-weight:600;background:none;color:var(--dim);border:0;border-top:3px solid transparent;cursor:pointer}
   .tabs button.on{color:var(--accent);border-top-color:var(--accent);background:#0f1318}
 }
+
+.alarmbar{padding:5px 16px;font-weight:600;border-bottom:1px solid var(--line)}
+.alarmbar.green{background:#0b2a17;color:var(--green)}
+.alarmbar.red{background:#5a0f0b;color:#fff;border-bottom-color:var(--red)}
+.alarmbar ul{margin:2px 0 0;padding-left:18px;font-weight:500}
+.replaybar{background:#0b0e12;border-bottom:1px solid var(--line);padding:6px 16px}
+.rb-row{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center}
+.replaybar button{background:#151b22;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:4px 10px;cursor:pointer;min-height:30px}
+.replaybar button.on{border-color:var(--accent);color:var(--accent)}
+.rb-speeds{display:inline-flex;gap:4px}
+#rb-lap{flex:1 1 160px;min-width:120px;accent-color:var(--accent)}
+#rb-num{width:64px;background:#151b22;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:4px}
+.rb-note,.rb-dim{color:var(--dim);font-size:12px}
+.timeline{position:relative;height:34px;margin:6px 0 2px;background:#10151b;border:1px solid var(--line);border-radius:4px}
+.tl-cur{position:absolute;top:0;bottom:0;width:2px;background:var(--accent);pointer-events:none;z-index:2}
+.replaybar .tl-mark{position:absolute;width:10px;height:10px;min-height:0;margin-left:-5px;border-radius:50%;border:0;padding:0}
+.tl-mark.ahead{opacity:.4}
+.tl-mark:hover,.tl-mark:focus{outline:2px solid #fff;z-index:3}
+.m-call,.replaybar .tl-mark.call{background:var(--accent)}.m-pit,.replaybar .tl-mark.pit{background:var(--blue)}
+.m-SC,.replaybar .tl-mark.SC{background:var(--orange)}.m-VSC,.replaybar .tl-mark.VSC{background:var(--purple)}
+.m-RED,.replaybar .tl-mark.RED{background:var(--red)}.m-rain,.replaybar .tl-mark.rain{background:#7fd6ff}
+.m-mechanic,.replaybar .tl-mark.mechanic{background:var(--yellow)}
+.rb-legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:11px;color:var(--dim)}
+.rb-legend span[class^=m-]{color:#000;padding:0 6px;border-radius:8px}
+@media (max-width:700px){.replaybar{padding:6px 10px}.alarmbar{padding:5px 10px}}

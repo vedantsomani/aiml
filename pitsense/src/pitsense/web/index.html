@@ -20,6 +20,18 @@
   <div id="mode" class="chip">--</div>
   <div id="conn" class="chip off">connecting</div>
 </header>
+<div id="alarmbar" class="alarmbar green" role="status" aria-live="polite"><b>HEALTH</b> <span>checking...</span></div>
+<div id="replaybar" class="replaybar" hidden>
+  <div class="rb-row">
+    <button id="rb-pause" type="button" title="pause / resume">Pause</button>
+    <span class="rb-speeds" id="rb-speeds"><button type="button" data-speed="1">1x</button><button type="button" data-speed="5">5x</button><button type="button" data-speed="20">20x</button><button type="button" data-speed="max">max</button></span>
+    <input id="rb-lap" type="range" min="0" max="1" value="0" step="1" aria-label="lap slider">
+    <input id="rb-num" type="number" min="0" max="1000" value="1" aria-label="jump to lap"><button id="rb-go" type="button">Go to lap</button>
+    <span id="rb-note" class="rb-note"></span>
+  </div>
+  <div id="timeline" class="timeline" aria-label="bookmarks"><div id="tl-cur" class="tl-cur"></div></div>
+  <div class="rb-legend"><span class="m-call">calls</span><span class="m-pit">pit stops</span><span class="m-SC">SC</span><span class="m-VSC">VSC</span><span class="m-RED">red flag</span><span class="m-rain">rain</span><span class="m-mechanic">mechanic</span><span class="rb-dim">dim = later in the race</span></div>
+</div>
 <div id="callbar" class="callbar" aria-live="polite"></div>
 <nav id="tabs" class="tabs" aria-label="sections">
   <button data-tab="tower" class="on">Tower</button><button data-tab="map">Map</button><button data-tab="radio">Radio</button><button data-tab="team">Team</button><button data-tab="alerts">Alerts</button>
