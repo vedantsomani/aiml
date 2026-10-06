@@ -55,6 +55,54 @@ def plan_text(stops) -> str:
     return ", ".join(f"L{lap} {comp}" for lap, comp in stops) if stops else "no stop"
 
 
+OPTIONS = 5  # plans shown side by side on the dashboard
+
+
+def _opt(p, base, tags, np) -> dict:
+    lo = hi = None
+    if p.pos is not None and len(p.pos):
+        lo, hi = (float(x) for x in np.percentile(p.pos, [10, 90]))
+    return {"plan": plan_text(p.stops), "stops": [[int(l), c] for l, c in p.stops],
+            "exp_pos": round(float(p.exp_pos), 2), "exp_pts": round(float(p.exp_pts), 2), "pos_sd": round(float(p.pos_sd), 2),
+            "p10": None if lo is None else round(lo, 1), "p90": None if hi is None else round(hi, 1),
+            "delta": None if base is None else round(float(p.exp_pos - base), 2), "tags": tags}
+
+
+def options(a) -> dict:
+    """The strategy comparison view for one car.
+
+    ``ranked``: the best few distinct plans for the race as it stands, plan A first, then by the simulator's
+    utility; each has ``plan`` text, ``stops`` [[in-lap, compound]], expected position / points, ``p10`` / ``p90``
+    of the simulated finishing positions (the spread of outcomes, 1 = best), ``delta`` places vs plan A, and its
+    role (``A``, ``now`` = best plan that stops this lap, ``later``, ``no stop``).
+    ``if_sc``: plan B, simulated in futures where a safety car comes, so it is not comparable with the others
+    (no ``delta``), with its ``trigger`` and ``sc_gain`` (places gained by stopping under that SC)."""
+    import numpy as np
+
+    tags: dict[int, list[str]] = {}
+    for tag, p in (("A", a.plan_a), ("now", a.now_best), ("later", a.later_best), ("no stop", a.nostop)):
+        if p is not None:
+            tags.setdefault(id(p), []).append(tag)
+    named = [p for p in (a.plan_a, a.now_best, a.later_best, a.nostop) if p is not None]
+    seen, uniq = set(), []
+    for p in named + sorted(a.ranked, key=lambda q: (q.util, q.exp_pos)):
+        key = tuple(p.stops)
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(p)
+    named = [p for p in uniq if id(p) in tags]
+    rest = [p for p in uniq if id(p) not in tags][: max(0, OPTIONS - len(named))]
+    base = a.plan_a.exp_pos
+    rows = sorted(named + rest, key=lambda q: (q is not a.plan_a, q.util, q.exp_pos))
+    out = {"ranked": [_opt(p, base, tags.get(id(p), []), np) for p in rows], "if_sc": None}
+    if a.plan_b is not None:
+        b = _opt(a.plan_b, None, ["B"], np)
+        b.update(trigger=a.plan_b_trigger, sc_gain=None if a.gain_sc is None else round(float(a.gain_sc), 2))
+        out["if_sc"] = b
+    return out
+
+
 class StrategyEngineer(Engineer):
     name = "strategy"
     requires = ("tyre", "pitstop", "rivals", "rules", "weather", "models")
@@ -90,6 +138,15 @@ class StrategyEngineer(Engineer):
                 out.update(plan_b=plan_text(a.plan_b.stops), plan_b_pos=round(a.plan_b.exp_pos, 2))
             if a.gain_sc is not None:
                 out["sc_gain"] = round(a.gain_sc, 3)
+        return out
+
+    def details(self, state, view):
+        """Per focus car: ``ranked`` / ``if_sc`` (see :func:`options`) and ``stop_dist`` (share of simulated futures whose
+        first stop is 0, 1, ... laps from now) for the dashboard's strategy comparison."""
+        out = {}
+        for n, a in get_analysis(self.ctx, self.memory, state, view).items():
+            if a.ok and a.plan_a is not None:
+                out[n] = {**options(a), "stop_dist": [round(float(x), 3) for x in a.stop_p]}
         return out
 
     def race(self, state, view):

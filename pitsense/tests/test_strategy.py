@@ -184,3 +184,20 @@ def test_field_event_switch_to_slicks_and_inters():
                                NS(compound="INTERMEDIATE"))["target"] is None
     act, comp, rs = wethead.apply_event(ev, "STAY_OUT", None, [], {}, 10, priors.Priors((), 5), NS(total_laps=50))
     assert act == "BOX" and "6 cars switched to slicks" in rs[0].text
+
+
+def test_strategy_options_for_the_comparison_view(race_log):
+    """The dashboard's strategy view: distinct plans, best first, plan A tagged, sane outcome spreads."""
+    team = TeamConfig(cars=("11", "22"))
+    state, wall = _run(race_log, until=race_log.events[int(len(race_log) * 0.4)].t, team=team)
+    det = wall.details(state).get("strategy", {})
+    got = [det[c]["ranked"] for c in ("11", "22") if c in det]
+    assert got, "no strategy options for the focus cars"
+    for opts in got:
+        assert opts and any("A" in o["tags"] for o in opts)
+        assert len({o["plan"] for o in opts}) == len(opts)
+        assert "A" in opts[0]["tags"] and opts[0]["delta"] == 0
+        assert all("B" not in o["tags"] for o in opts)  # the SC plan is shown apart, never ranked against A
+        for o in opts:
+            if o["p10"] is not None:
+                assert 1 <= o["p10"] <= o["exp_pos"] + 1e-6 and o["exp_pos"] <= o["p90"] + 1e-6

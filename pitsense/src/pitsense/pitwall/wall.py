@@ -99,6 +99,20 @@ class PitWall:
         v = self.view(state)
         return [_typed(a, Alert, e.name) for e in self.engineers for a in e.alerts(state, v)]
 
+    def details(self, state: "RaceState") -> dict:
+        """Structured display data (lists, tables) from engineers with an optional ``details(state, view)``.
+
+        Not part of car / race values: those stay scalar so every decision row is a flat feature row."""
+        v = self.view(state)
+        out = {}
+        for e in self.engineers:
+            f = getattr(e, "details", None)
+            if f is not None:
+                d = f(state, v)
+                if d:
+                    out[e.name] = d
+        return out
+
     def calls(self, state: "RaceState") -> list[Call]:
         v = self.view(state)
         return [_typed(c, Call, e.name) for e in self.engineers for c in e.calls(state, v)]

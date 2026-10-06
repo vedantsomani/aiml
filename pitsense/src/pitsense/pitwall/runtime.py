@@ -706,6 +706,10 @@ class PitWallRuntime:
             return None
         d = snap.to_dict()
         d["extra"] = self._extra(state)
+        try:
+            d["extra"]["details"] = self.wall.details(state)
+        except Exception:
+            log.exception("engineer details failed at t=%.1f", state.t)
         self._log_changes(state, d, snap)
         d["extra"]["radio"] = dict(self.radio)
         d["extra"].update(self._feed_extra(state))

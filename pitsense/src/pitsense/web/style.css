@@ -130,7 +130,7 @@ main>*,aside>*{min-width:0}
   aside{display:block}
   .panel[data-tab]{display:none}
   body.tab-tower .panel[data-tab="tower"],body.tab-map .panel[data-tab="map"],body.tab-radio .panel[data-tab="radio"],
-  body.tab-team .panel[data-tab="team"],body.tab-alerts .panel[data-tab="alerts"]{display:block}
+  body.tab-team .panel[data-tab="team"],body.tab-strategy .panel[data-tab="strategy"],body.tab-alerts .panel[data-tab="alerts"]{display:block}
   body.tab-tower #qpanel[hidden]{display:none}
   .tower{overflow-x:hidden}
   th.x,td.x{display:none}
@@ -176,3 +176,16 @@ main>*,aside>*{min-width:0}
 .rb-legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:11px;color:var(--dim)}
 .rb-legend span[class^=m-]{color:#000;padding:0 6px;border-radius:8px}
 @media (max-width:700px){.replaybar{padding:6px 10px}.alarmbar{padding:5px 10px}}
+
+/* strategy comparison */
+.sc-car{margin-bottom:12px}.sc-car h3{margin:0 0 4px;font-size:14px}.sc-car h3 .kv{margin-left:8px}
+.sc-tab td{vertical-align:middle}.sc-tab tr.best td{color:var(--fg);font-weight:600}
+.sc-tag{display:inline-block;font-size:10px;font-weight:800;padding:0 5px;margin-right:3px;border-radius:3px;background:var(--line);color:var(--fg)}
+.sc-tag.A{background:var(--accent);color:#000}.sc-tag.B{background:var(--purple)}.sc-tag.now{background:var(--red)}
+.sc-range{position:relative;height:12px;min-width:140px;background:#0a0d11;border-radius:6px}
+.sc-range i{position:absolute;top:2px;height:8px;border-radius:4px;background:#2c5a73}
+.sc-range b{position:absolute;top:0;width:12px;height:12px;margin-left:-6px;border-radius:50%;background:var(--accent)}
+.sc-dist{display:flex;align-items:flex-end;gap:2px;height:38px;margin-top:4px}
+.sc-dist div{flex:1;background:#2c5a73;min-height:1px;position:relative}.sc-dist div.cur{background:var(--orange)}
+.sc-axis{display:flex;gap:2px;font-size:10px;color:var(--dim)}.sc-axis span{flex:1;text-align:center}
+.sc-b{margin:6px 0 2px;font-size:13px}

@@ -54,7 +54,7 @@ $("teamsel").addEventListener("change", (e) => {
   myTeam = e.target.value;
   try { localStorage.setItem("pitsense.team", myTeam); } catch (e2) { /* no storage */ }
   convoSig = ""; seenMsgs.clear();
-  if (snap) { renderTower(snap); renderFocus(snap); renderCallbar(snap); applyFocus(); renderConvo(snap); renderQuali(snap); }
+  if (snap) { renderTower(snap); renderFocus(snap); renderStrategy(snap); renderCallbar(snap); applyFocus(); renderConvo(snap); renderQuali(snap); }
 });
 
 // ---- phone tabs (CSS shows one section at a time under 700 px; on larger screens everything is visible)
@@ -587,6 +587,37 @@ function renderFocus(s) {
   }).join("");
 }
 
+// ---- strategy comparison: the simulator's best plans side by side, with the spread of outcomes
+function rangeBar(p10, p90, mean, n) {
+  if (mean == null) return "--";
+  const x = (v) => (100 * (Math.min(n, Math.max(1, v)) - 1) / Math.max(1, n - 1)).toFixed(1);
+  const band = p10 == null ? "" : '<i style="left:' + x(p10) + "%;width:" + Math.max(1, x(p90) - x(p10)) + '%"></i>';
+  return '<div class="sc-range" title="P' + num(p10) + " to P" + num(p90) + ' in 80% of futures">' + band + '<b style="left:' + x(mean) + '%"></b></div>';
+}
+function renderStrategy(s) {
+  const mine = [...focusSet()], row = {}, n = s.tower.filter((r) => r.running).length || 20;
+  for (const r of s.tower) row[r.car] = r;
+  const html = mine.filter((c) => row[c]).map((c) => {
+    const v = (s.cars || {})[c] || {}, r = row[c], det = ((s.extra.details || {}).strategy || {})[c] || {}, opts = det.ranked || [];
+    const head = '<h3>' + esc(r.tla || c) + ' <span class="kv">P<span>' + (r.position == null ? "-" : r.position) + "</span></span>" + tyre(r.compound, r.tyre_age) + "</h3>";
+    if (!opts.length) return '<div class="sc-car">' + head + '<div class="empty">' + esc(v.strategy__why || "no plans yet") + "</div></div>";
+    const rows = opts.map((o, i) => '<tr class="' + (i === 0 ? "best" : "") + '"><td>' + o.tags.map((t) => '<span class="sc-tag ' + esc(t.split(" ")[0]) + '">' + esc(t) + "</span>").join("") +
+      "</td><td>" + esc(o.plan) + "</td><td>P" + num(o.exp_pos, 1) + "</td><td>" + rangeBar(o.p10, o.p90, o.exp_pos, n) +
+      '</td><td class="' + (o.delta > 0.05 ? "worse" : o.delta < -0.05 ? "better" : "") + '">' + (o.delta == null ? "" : (o.delta > 0 ? "+" : "") + num(o.delta, 2)) +
+      "</td><td>" + num(o.exp_pts, 1) + "</td></tr>").join("");
+    const d = det.stop_dist || [], mx = Math.max(...d, 0.001);
+    const dist = d.length ? '<div class="kv">when the simulator expects the first stop (laps from now)</div><div class="sc-dist">' +
+      d.map((x, i) => '<div class="' + (i === 0 ? "cur" : "") + '" style="height:' + (100 * x / mx).toFixed(0) + '%" title="+' + i + " laps: " + pct(x) + '"></div>').join("") +
+      '</div><div class="sc-axis">' + d.map((x, i) => "<span>" + (i === 0 ? "now" : "+" + i) + "</span>").join("") + "</div>" : "";
+    const b = det.if_sc, sc = b ? '<div class="sc-b"><span class="sc-tag B">if SC</span> ' + esc(b.plan) + " &rarr; P" + num(b.exp_pos, 1) +
+      (b.sc_gain != null ? ' <span class="kv">stopping under it gains <span>' + num(b.sc_gain, 2) + " places</span></span>" : "") +
+      (b.trigger ? ' <span class="kv">' + esc(b.trigger) + "</span>" : "") + "</div>" : "";
+    return '<div class="sc-car">' + head + '<table class="sc-tab"><thead><tr><th></th><th>PLAN</th><th>EXP</th><th>OUTCOMES (P1 &rarr; P' + n +
+      ')</th><th>VS A</th><th>PTS</th></tr></thead><tbody>' + rows + "</tbody></table>" + sc + dist + "</div>";
+  });
+  $("strat").innerHTML = html.length ? html.join("") : '<div class="empty">Pick a team above or pin cars from the tower to compare strategies.</div>';
+}
+
 function renderAlerts(s) {
   const al = s.alerts || [], rc = s.extra.rc || [], order = {critical: 0, warn: 1, info: 2};
   $("alerts").innerHTML = al.length
@@ -602,7 +633,7 @@ function render(s) {
   if (!s || s.waiting) return;
   s.extra = s.extra || {};
   snap = s;
-  syncTeamSel(s); renderHeader(s); renderQuali(s); renderTower(s); renderFocus(s); renderCallbar(s); renderAlerts(s);
+  syncTeamSel(s); renderHeader(s); renderQuali(s); renderTower(s); renderFocus(s); renderStrategy(s); renderCallbar(s); renderAlerts(s);
   if (s.extra.team_radio) radioList = s.extra.team_radio;
   if (s.extra.positions) onPositions(s.extra.positions);
   renderMap(s); renderConvo(s);
