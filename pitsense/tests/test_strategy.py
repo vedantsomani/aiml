@@ -91,3 +91,29 @@ def test_head_hysteresis_keeps_last_laps_target():
 def test_priors_default_without_history():
     p = priors.Priors((), 5)
     assert p.life["MEDIUM"] == priors.LIFE["MEDIUM"] and p.sc_rate > 0 and len(p.pass_p) == 6
+
+
+# --- call quality: the P18.7 forecast (live Bahrain 2026, lap 9 under an SC) -------------------------------------
+def test_order_consistent_puts_the_car_where_the_timing_screen_has_it():
+    from types import SimpleNamespace as NS
+
+    F = _field(C=4)
+    F.x0 = np.array([0.0, 50.0, 101.0, 90.0])  # car 3 is ahead of car 2's time on screen P3 but crossed the line 11 s later
+    cars = [NS(position=1, laps=9), NS(position=2, laps=9), NS(position=3, laps=9), NS(position=4, laps=9)]
+    analysis._order_consistent(F, cars)
+    assert np.all(np.diff(F.x0) > 0)
+    assert F.x0[2] == 101.0 and F.x0[3] > 101.0
+
+
+def test_order_consistent_leaves_other_laps_alone():
+    from types import SimpleNamespace as NS
+
+    F = _field(C=3)
+    F.x0 = np.array([0.0, 120.0, 30.0])
+    analysis._order_consistent(F, [NS(position=1, laps=9), NS(position=2, laps=8), NS(position=3, laps=9)])
+    assert list(F.x0) == [0.0, 120.0, 30.0]
+
+
+def test_pace_band_bounds_outlier_stints():
+    lo, hi = 110.0 * (1 - analysis.PACE_BAND[0]), 110.0 * (1 + analysis.PACE_BAND[1])
+    assert min(max(137.3, lo), hi) < 120.0 and min(max(100.0, lo), hi) == lo

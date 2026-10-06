@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from ...memory import is_clean
 from ...types import Plan, PlanStop
 from .priors import DRY, LIFE, Priors
 from .run import FieldRun, evaluate_plans, simulate_field
@@ -52,6 +53,7 @@ SETTINGS = {
     "use_wet_engine": True,  # wet / mixed races: tyre-class calls from the wet simulator (False: NO_CALL as before the wet work)
     "tol_keep": 0.05,  # keep last lap's target stop lap unless the best plan is better by more than this
 }
+PACE_BAND = (0.04, 0.06)  # a car's expected lap time stays within -4 % / +6 % of the field median (drying or wet tracks make single stints outliers)
 OFFS1 = (0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 17, 20, 24, 28, 33, 38, 44, 50, 58)
 OFFS2 = (0, 3, 6, 10, 15, 21, 27)
 GAPS2 = (8, 12, 16, 21, 27)
@@ -151,6 +153,34 @@ def near_rates(view) -> tuple[float | None, float | None]:
     return 1 - (1 - min(ps, 0.9)) ** 0.5, 1 - (1 - min(pv, 0.9)) ** 0.5
 
 
+def _clean_pace(memory, number: str, lap: int) -> float | None:
+    """Median of the car's last 3 clean (green, no pit) laps: never a lap run under an SC, VSC or through the pits."""
+    laps = memory.index.by_driver.get(number, {})
+    xs = [laps[k].lap_time for k in range(lap, max(lap - 8, 1), -1) if is_clean(laps.get(k))][:3]
+    return float(np.median(xs)) if xs else None
+
+
+def _field_clean_pace(memory, A: int) -> float:
+    """The field's clean lap time over the last 8 laps (90 s when no lap has been green yet)."""
+    xs = [r.lap_time for laps in memory.index.by_driver.values() for k, r in laps.items() if k > A - 8 and is_clean(r)]
+    return float(np.median(xs)) if xs else 90.0
+
+
+def _order_consistent(F: FieldIn, cars: list) -> None:
+    """Make the line-crossing times agree with the timing screen: of two cars on the same lap the one ahead in the
+    standings is not later over the line. Under an SC the screen is ahead of the last lap's times (the field bunches
+    and cars are re-ordered), and a time order that disagrees with it puts a car in the wrong place for the whole forecast."""
+    byl: dict[int, list[int]] = {}
+    for i, d in enumerate(cars):
+        if d.position is not None:
+            byl.setdefault(d.laps, []).append(i)
+    for idx in byl.values():
+        idx.sort(key=lambda i: cars[i].position)
+        for a, b in zip(idx, idx[1:]):
+            if F.x0[b] < F.x0[a] + 0.01:
+                F.x0[b] = F.x0[a] + 0.01
+
+
 def build_field(state, view, memory, ctx, pri: Priors, A: int) -> tuple[FieldIn, list[str], dict]:
     """The running field at the end of lap ``A``, as arrays."""
     tyre_r = view.race("tyre")
@@ -166,11 +196,13 @@ def build_field(state, view, memory, ctx, pri: Priors, A: int) -> tuple[FieldIn,
         t = view.car("tyre", d.number)
         p = _num(t.get("pace_s"))
         if p is None:
-            p = _num(t.get("stint_pace")) or _num(d.last_lap_time)
+            p = _num(t.get("stint_pace")) or _clean_pace(memory, d.number, d.laps)
         raw.append((d, t, p))
         if p is not None:
             paces.append(p)
-    ref_pace = float(np.median(paces)) if paces else 90.0
+    ref_pace = float(np.median(paces)) if paces else _field_clean_pace(memory, A)
+    lo, hi = ref_pace * (1 - PACE_BAND[0]), ref_pace * (1 + PACE_BAND[1])  # a car's pace is the field's within a few %, not 25 % off
+    raw = [(d, t, None if p is None else min(max(p, lo), hi)) for d, t, p in raw]
     rows = []
     for d, t, p in raw:
         x, lag_est = _anchor_time(memory, d.number, A, p or ref_pace)
@@ -255,6 +287,7 @@ def build_field(state, view, memory, ctx, pri: Priors, A: int) -> tuple[FieldIn,
     slot = {n: i for i, n in enumerate(allnum)}
     F.slots = np.array([slot[n] for n in names], dtype=np.int64)
     F.n_slots = len(allnum)
+    _order_consistent(F, [r[0] for r in rows])
     F.x0 -= F.x0.min() if C else 0.0
     return F, names, info
 
