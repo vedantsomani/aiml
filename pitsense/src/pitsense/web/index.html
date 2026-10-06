@@ -64,6 +64,16 @@
       </form>
       <div id="askstat" class="askstat" aria-live="polite"></div></section>
     <section class="panel strat" data-tab="strategy"><h2>Strategy options <small>simulated rest of race &middot; bar = 80% of outcomes, dot = expected</small></h2><div id="strat"></div></section>
+    <section class="panel" data-tab="strategy"><h2>Gaps <small>3 cars ahead (up) and behind (down), last 15 laps &middot; band = pit-loss window</small></h2><div id="gapchart"></div></section>
+    <section class="panel" data-tab="strategy"><h2>What if <small>our car, stop lap, tyre: simulated as of now</small></h2>
+      <form id="wiform" class="askform wiform" autocomplete="off">
+        <select id="wicar" aria-label="car"></select>
+        <label>lap <input id="wilap" type="number" min="1" max="99" value="1" aria-label="stop lap"></label>
+        <select id="wicomp" aria-label="tyre"><option value="">any tyre</option><option>SOFT</option><option>MEDIUM</option><option>HARD</option></select>
+        <button id="wibtn" type="submit">Simulate</button>
+      </form><div id="wiout" class="wiout" aria-live="polite"></div></section>
+    <section class="panel" data-tab="strategy"><h2>Stints <small>every car &middot; line = current lap</small></h2><div id="stintchart"></div></section>
+    <section class="panel" data-tab="strategy"><h2>Call history <small>our calls on a lap axis</small></h2><div id="callhist"></div></section>
     <section class="panel" data-tab="team"><h2>Our cars <small id="focusnote"></small></h2><div id="focus"></div></section>
     <section class="panel" data-tab="alerts"><h2>Alerts</h2><div id="alerts"></div></section>
     <section class="panel" data-tab="alerts"><h2>Race control</h2><div id="rc"></div></section>

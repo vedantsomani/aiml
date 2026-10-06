@@ -10,6 +10,8 @@
     GET /api/stream        server-sent events: "snapshot" (the snapshot JSON), "pos" (car positions, ~3 Hz), "status"
     GET /api/radio.wav     ?car=N[&i=ID]: our pit wall's message (latest, or by id), spoken (Piper TTS; 404 if not installed)
     GET /api/teamradio     ?car=N&i=K: the K-th real driver radio mp3 of car N (published clips only, audio/mpeg)
+    POST /api/whatif       {"car": "16", "stop_lap": 25, "compound": "HARD"}: simulate that plan as of now; expected position,
+                           P10-P90 and the difference vs plan A (token and same-origin checks as /api/ask)
     POST /api/ask          {"car": "16", "text": "what if we box now?"}: answer a what-if or fact question; the Q&A joins the
                            conversation and the answer can be spoken via /api/radio.wav?car=N&i=<reply id>
     POST /api/ask_audio    ?car=N, body = recorded audio (webm/opus, ogg, wav): transcribed on the server, then as /api/ask
@@ -153,7 +155,7 @@ def _handler(rt, token: str | None = None, max_viewers: int = MAX_VIEWERS):
             try:
                 if not self._authorised():
                     return self._deny()
-                if path not in ("/api/ask", "/api/ask_audio") and path not in REPLAY_POSTS:
+                if path not in ("/api/ask", "/api/ask_audio", "/api/whatif") and path not in REPLAY_POSTS:
                     return self._json({"error": "not found"}, 404)
                 if not self._same_origin():
                     return self._json({"ok": False, "error": "cross-origin request refused"}, 403)
@@ -162,6 +164,13 @@ def _handler(rt, token: str | None = None, max_viewers: int = MAX_VIEWERS):
                     return
                 if path in REPLAY_POSTS:
                     return self._replay(path, body)
+                if path == "/api/whatif":
+                    try:
+                        req = json.loads(body.decode("utf-8") or "{}")
+                        out = rt.whatif(str(req.get("car") or ""), req.get("stop_lap"), req.get("compound"))
+                    except (ValueError, AttributeError):
+                        return self._json({"ok": False, "error": 'body must be JSON: {car, stop_lap, compound}'}, 400)
+                    return self._json(out, 200 if out.get("ok") else 422)
                 if path == "/api/ask":
                     try:
                         req = json.loads(body.decode("utf-8") or "{}")

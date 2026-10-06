@@ -189,3 +189,19 @@ main>*,aside>*{min-width:0}
 .sc-dist div{flex:1;background:#2c5a73;min-height:1px;position:relative}.sc-dist div.cur{background:var(--orange)}
 .sc-axis{display:flex;gap:2px;font-size:10px;color:var(--dim)}.sc-axis span{flex:1;text-align:center}
 .sc-b{margin:6px 0 2px;font-size:13px}
+
+/* ---- charts: gaps, stints, what-if, call history */
+.chart{display:block;width:100%;height:auto;max-height:340px}
+.chart text{fill:var(--dim);font-size:9px;font-family:inherit}
+.chart .grid{stroke:var(--line);stroke-width:.5}.chart .band{fill:var(--orange);opacity:.16}
+.chart .now{stroke:var(--accent);stroke-width:1;stroke-dasharray:3 2}
+.chart .me text{fill:var(--fg);font-weight:700}
+.chart .bar.S{fill:var(--soft)}.chart .bar.M{fill:var(--medium)}.chart .bar.H{fill:var(--hard)}.chart .bar.I{fill:var(--inter)}.chart .bar.W{fill:var(--wet)}.chart .bar.u{fill:var(--line)}
+.chart .bar{opacity:.8}.chart .me .bar{opacity:1;stroke:var(--accent);stroke-width:1}
+.gc-car{margin-bottom:10px}.gc-car h3{margin:0 0 2px;font-size:13px}
+.wiform label{display:flex;align-items:center;gap:4px;color:var(--dim)}.wiform input{width:64px;flex:none}
+.wiout{margin-top:8px;font-size:13px}.wiout .kv{margin-right:10px}.wiout .worse{color:var(--red)}.wiout .better{color:var(--green)}
+.wiout p{margin:4px 0;color:var(--dim)}
+.ch-leg{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;color:var(--dim);margin-top:4px}
+.ch-leg i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:3px}
+@media (max-width:760px){.wiform{flex-wrap:wrap}.wiform input,.wiform select,.wiform button{min-height:40px}.wiform input{width:72px}}

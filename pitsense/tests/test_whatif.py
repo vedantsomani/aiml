@@ -309,3 +309,43 @@ def test_page_has_the_ask_box_and_microphone():
         assert needle in html
     for needle in ("/api/ask_audio", "/api/ask", "MediaRecorder", "getUserMedia"):
         assert needle in js
+
+
+# ------------------------------------------------------------------ /api/whatif and the chart history payload
+def test_api_whatif_runs_the_plan_as_of_now_and_is_protected():
+    rt = _runtime(until_lap=6)
+    server = serve(rt, port=0, token="s3cret")
+    port = server.server_address[1]
+    lap = rt.state.current_lap + 1
+    body = json.dumps({"car": "11", "stop_lap": lap, "compound": "HARD"}).encode()
+    try:
+        assert _post(port, "/api/whatif", body)[0] in (401, 403)  # no token: refused like /api/ask
+        h = {"Authorization": "Bearer s3cret"}
+        code, r = _post(port, "/api/whatif?token=s3cret", body, headers=h)
+        assert code == 200 and r["ok"], r
+        s = r["scenario"]
+        assert s["stops"] == [[lap, "HARD"]] and 1 <= s["p10"] <= s["p90"]
+        assert "delta_pos" in r and "versus" in r
+        assert json.dumps(r)
+        assert _post(port, "/api/whatif?token=s3cret", json.dumps({"car": "11", "stop_lap": "x"}).encode(), headers=h)[0] == 422
+        assert _post(port, "/api/whatif?token=s3cret", json.dumps({"car": "11", "stop_lap": lap, "compound": "MUSH"}).encode(), headers=h)[0] == 422
+        assert _post(port, "/api/whatif?token=s3cret", json.dumps({"car": "999", "stop_lap": lap}).encode(), headers=h)[0] == 422
+        assert _post(port, "/api/whatif?token=s3cret", b"nope", headers=h)[0] == 400
+    finally:
+        server.shutdown()
+        rt.stop()
+
+
+def test_chart_history_payload_is_small_and_as_of():
+    rt = _runtime(until_lap=8)
+    d = rt.publish(force=True)
+    ch = d["extra"]["charts"]
+    assert set(ch) == {"stints", "gaps", "order"}
+    assert set(ch["gaps"]) <= {"11", "22"} and ch["gaps"]
+    g = next(iter(ch["gaps"].values()))
+    assert 1 <= len(g["laps"]) <= 15 and len(g["ahead"]) == len(g["laps"]) == len(g["behind"])
+    assert all(len(r) == 3 for r in g["ahead"] + g["behind"])
+    assert max(g["laps"]) <= rt.state.current_lap
+    for rows in ch["stints"].values():
+        assert rows and all(len(r) == 3 and r[1] <= r[2] for r in rows)
+    assert len(json.dumps(ch)) < 30_000

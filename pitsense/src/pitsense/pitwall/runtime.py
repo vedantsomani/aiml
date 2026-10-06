@@ -33,6 +33,7 @@ from pathlib import Path
 from .. import events as _events  # the feeder: reads the log; exempt by name in tests/test_pitwall.py
 from ..config import FEED_TOPICS
 from ..state import RaceState
+from . import charts
 from . import replay as _replay
 from .types import Snapshot, TeamConfig
 
@@ -711,6 +712,10 @@ class PitWallRuntime:
         except Exception:
             log.exception("engineer details failed at t=%.1f", state.t)
         self._log_changes(state, d, snap)
+        try:
+            d["extra"]["charts"] = charts.build(state, self.wall.memory, snap.focus)
+        except Exception:
+            log.exception("chart history failed at t=%.1f", state.t)
         d["extra"]["radio"] = dict(self.radio)
         d["extra"].update(self._feed_extra(state))
         payload = _json_bytes(d)
@@ -1155,6 +1160,34 @@ class PitWallRuntime:
         out["heard"] = heard
         out["asr_ms"] = round((time.perf_counter() - t0) * 1000) - out.get("ms", 0)
         return out
+
+    def whatif(self, car: str | None, stop_lap, compound: str | None) -> dict:
+        """Run the simulator for "car stops on lap N for COMPOUND" as of now (no future data); compact result for the dashboard."""
+        from .. import whatif as wi
+        from .engineers.strategy.priors import DRY
+
+        comp = str(compound).upper() if compound else None
+        if comp is not None and comp not in DRY:
+            return {"ok": False, "error": f"compound must be one of {', '.join(DRY)}"}
+        try:
+            lap = int(stop_lap)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "stop lap must be a whole number"}
+        t0 = time.perf_counter()
+        with self.sim_lock:
+            state = self.state
+            if self.wall is None or self._wall_quali or not state.drivers:
+                return {"ok": False, "error": "the pit wall has no race data yet"}
+            car = str(car or "")
+            if car not in state.drivers:
+                return {"ok": False, "error": f"unknown car {car!r}"}
+            q = wi.Question(f"stop on lap {lap}", "whatif", (wi.Spec("lap", lap=lap, compound=comp),))
+            r = wi.what_if(self.wall, state, car, q)
+        if not r.get("ok"):
+            return {"ok": False, "error": r.get("why") or "no answer", "car": car}
+        keep = ("car", "tla", "lap", "total", "position", "compound", "tyre_age", "scenario", "versus", "delta_pos", "delta_time_s",
+                "p_gain", "p_loss", "legal", "notes", "reasons", "answer", "n_sims", "t")
+        return {"ok": True, **{k: r.get(k) for k in keep}, "stop_lap": max(lap, r["lap"]), "ms": round((time.perf_counter() - t0) * 1000)}
 
     def calls(self) -> dict:
         with self.lock:

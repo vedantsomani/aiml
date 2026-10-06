@@ -67,6 +67,7 @@ function setTab(t) {
   for (const b of document.querySelectorAll("#tabs button")) b.classList.toggle("on", b.dataset.tab === t);
   try { localStorage.setItem("pitsense.tab", t); } catch (e) { /* no storage */ }
   if (t === "map" && typeof scaleMap === "function") setTimeout(scaleMap, 0);
+  if (t === "strategy") setTimeout(() => { if (snap) renderCharts(snap); }, 0);
 }
 $("tabs").addEventListener("click", (e) => { const b = e.target.closest("button[data-tab]"); if (b) setTab(b.dataset.tab); });
 setTab(tab);
@@ -629,11 +630,172 @@ function renderAlerts(s) {
     : '<div class="empty">None.</div>';
 }
 
+// ---- charts (Strategy tab): gap chart, stint chart, what-if, call history. Plain SVG; data from extra.charts and /api/calls.
+const svgEl = (tag, attrs, kids) => {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs || {}) e.setAttribute(k, attrs[k]);
+  for (const c of kids || []) e.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  return e;
+};
+const chartSvg = (w, h, kids) => svgEl("svg", {class: "chart", viewBox: "0 0 " + w + " " + h, preserveAspectRatio: "xMidYMid meet", role: "img"}, kids);
+function gapChart(g, loss) {
+  const W = 320, H = 170, L = 26, R = 34, T = 8, B = 16, mid = T + (H - T - B) / 2, half = (H - T - B) / 2;
+  const n = g.laps.length;
+  if (n < 2) return null;
+  const lo = loss ? Math.min(loss.green, loss.now) : null, hi = loss ? Math.max(loss.green, loss.now) : null;
+  const bl = lo == null ? null : hi - lo < 3 ? [(lo + hi) / 2 - 1.5, (lo + hi) / 2 + 1.5] : [lo, hi];
+  const vals = [].concat(...g.ahead, ...g.behind).filter((v) => v != null);
+  const ymax = Math.max(10, Math.min(60, Math.max(bl ? bl[1] * 1.25 : 0, Math.max(...vals, 0) * 1.05)));
+  const x = (i) => L + (W - L - R) * i / (n - 1), y = (v, sign) => mid - sign * half * Math.min(v, ymax) / ymax;
+  const kids = [];
+  if (bl) for (const sg of [1, -1]) kids.push(svgEl("rect", {class: "band", x: L, width: W - L - R, y: Math.min(y(bl[0], sg), y(bl[1], sg)), height: Math.abs(y(bl[1], sg) - y(bl[0], sg))}));
+  for (const v of [0, ymax / 2, ymax]) for (const sg of v ? [1, -1] : [1]) {
+    kids.push(svgEl("line", {class: "grid", x1: L, x2: W - R, y1: y(v, sg), y2: y(v, sg)}));
+    kids.push(svgEl("text", {x: L - 3, y: y(v, sg) + 3, "text-anchor": "end"}, [Math.round(v) + "s"]));
+  }
+  kids.push(svgEl("text", {x: L, y: H - 3}, ["lap " + g.laps[0]]));
+  kids.push(svgEl("text", {x: W - R, y: H - 3, "text-anchor": "end"}, ["lap " + g.laps[n - 1]]));
+  const shade = [1, 0.65, 0.4];
+  for (const [rows, tl, sg, dash] of [[g.ahead, g.tla_ahead, 1, ""], [g.behind, g.tla_behind, -1, "4 2"]]) {
+    for (let k = 2; k >= 0; k--) {
+      let d = "", pen = false, last = null;
+      rows.forEach((r, i) => { const v = r[k]; if (v == null) { pen = false; return; } d += (pen ? "L" : "M") + x(i).toFixed(1) + " " + y(v, sg).toFixed(1); pen = true; last = [i, v]; });
+      if (!d) continue;
+      const c = sg > 0 ? "var(--accent)" : "var(--orange)";
+      const t = svgEl("path", {d, fill: "none", stroke: c, "stroke-width": k === 0 ? 2 : 1.2, opacity: shade[k], "stroke-dasharray": dash});
+      t.appendChild(svgEl("title", {}, [(sg > 0 ? "ahead +" : "behind -") + (k + 1) + " place: " + (tl[n - 1][k] || "")]));
+      kids.push(t);
+      if (last && last[0] === n - 1) kids.push(svgEl("text", {x: W - R + 3, y: y(last[1], sg) + 3, fill: c}, [(tl[n - 1][k] || "") + " " + last[1].toFixed(1)]));
+    }
+  }
+  return chartSvg(W, H, kids);
+}
+function renderGaps(s) {
+  const ch = (s.extra || {}).charts || {}, mine = [...focusSet()], row = {};
+  for (const r of s.tower || []) row[r.car] = r;
+  const race = s.race || {}, loss = race.pitstop__loss_green != null && race.pitstop__loss_now != null ? {green: race.pitstop__loss_green, now: race.pitstop__loss_now} : null;
+  const box = $("gapchart");
+  box.textContent = "";
+  let any = false;
+  for (const c of mine) {
+    const g = (ch.gaps || {})[c];
+    if (!g || !row[c]) continue;
+    any = true;
+    const d = document.createElement("div");
+    d.className = "gc-car";
+    d.innerHTML = "<h3>" + esc(row[c].tla || c) + ' <span class="kv">P' + row[c].position + "</span></h3>";
+    const svg = gapChart(g, loss);
+    if (svg) d.appendChild(svg); else d.insertAdjacentHTML("beforeend", '<div class="empty">not enough laps yet</div>');
+    box.appendChild(d);
+  }
+  if (!any) { box.innerHTML = '<div class="empty">Gaps appear once our cars have two timed laps.</div>'; return; }
+  box.insertAdjacentHTML("beforeend", '<div class="ch-leg"><span><i style="background:var(--accent)"></i>ahead (solid)</span><span><i style="background:var(--orange)"></i>behind (dashed)</span>' +
+    (loss ? "<span>band: pit loss " + num(Math.min(loss.green, loss.now)) + "-" + num(Math.max(loss.green, loss.now)) + " s. A car inside it is one stop away from swapping places.</span>" : "") + "</div>");
+}
+function renderStints(s) {
+  const ch = (s.extra || {}).charts || {}, st = ch.stints || {}, order = (ch.order || []).filter((c) => st[c] && st[c].length);
+  if (!order.length) { $("stintchart").innerHTML = '<div class="empty">No stints yet.</div>'; return; }
+  const total = s.total_laps || Math.max(s.lap || 1, ...order.map((c) => st[c][st[c].length - 1][2]));
+  const W = 320, L = 28, rh = 12, H = order.length * rh + 18, x = (lap) => L + (W - L - 4) * lap / total, mine = focusSet();
+  const tla = {};
+  for (const r of s.tower || []) tla[r.car] = r.tla || r.car;
+  const kids = [];
+  order.forEach((c, i) => {
+    const g = svgEl("g", {class: mine.has(c) ? "me" : ""}), y = 2 + i * rh;
+    g.appendChild(svgEl("text", {x: 0, y: y + 8}, [tla[c] || c]));
+    for (const [k, a, b] of st[c]) {
+      const r = svgEl("rect", {class: "bar " + (SHORT_K[k] ? k : "u"), x: x(a - 1), y, width: Math.max(1.5, x(b) - x(a - 1) - 0.6), height: rh - 3, rx: 2});
+      r.appendChild(svgEl("title", {}, [(tla[c] || c) + " " + k + " laps " + a + "-" + b]));
+      g.appendChild(r);
+    }
+    kids.push(g);
+  });
+  for (let l = 0; l <= total; l += 10) kids.push(svgEl("text", {x: x(l), y: H - 3, "text-anchor": "middle"}, [String(l)]));
+  if (s.lap) kids.push(svgEl("line", {class: "now", x1: x(s.lap), x2: x(s.lap), y1: 0, y2: H - 12}));
+  $("stintchart").textContent = "";
+  $("stintchart").appendChild(chartSvg(W, H, kids));
+  $("stintchart").insertAdjacentHTML("beforeend", '<div class="ch-leg">' + [["soft"], ["medium"], ["hard"], ["inter"], ["wet"]].map((c) => '<span><i style="background:var(--' + c[0] + ')"></i>' + c[0] + "</span>").join("") + "</div>");
+}
+const SHORT_K = {S: 1, M: 1, H: 1, I: 1, W: 1};
+// what-if: POST /api/whatif {car, stop_lap, compound}
+let wiBusy = false, wiLapSet = false;
+function syncWiCars(s) {
+  const sel = $("wicar"), cars = [...focusSet()].filter((c) => (s.tower || []).some((r) => r.car === c && r.running)), sig = cars.join(",");
+  if (sel.dataset.sig === sig) return;
+  const cur = sel.value;
+  sel.dataset.sig = sig;
+  const tla = {};
+  for (const r of s.tower || []) tla[r.car] = r.tla || r.car;
+  sel.innerHTML = cars.map((c) => '<option value="' + esc(c) + '">' + esc(tla[c]) + "</option>").join("");
+  if (cars.includes(cur)) sel.value = cur;
+}
+function syncWiLap(s) {
+  if (!wiLapSet && s.lap) { $("wilap").value = Math.min(s.total_laps || 99, s.lap + 3); wiLapSet = true; }
+  if (s.total_laps) $("wilap").max = s.total_laps;
+}
+function wiResult(r) {
+  if (!r || !r.ok) return '<div class="empty">' + esc((r && r.error) || "no answer") + "</div>";
+  const sc = r.scenario || {}, v = r.versus || {}, dp = r.delta_pos;
+  const cls = dp > 0.05 ? "better" : dp < -0.05 ? "worse" : "";
+  return '<div><span class="kv">' + esc(r.tla) + " " + esc(sc.plan || "") + '</span></div><div><span class="kv">expected <span>P' + num(sc.exp_pos, 1) + '</span></span><span class="kv">P10-P90 <span>P' + num(sc.p10, 0) + "-P" + num(sc.p90, 0) + "</span></span>" +
+    '<span class="kv">vs plan A <span class="' + cls + '">' + (dp == null ? "--" : (dp > 0 ? "+" : "") + num(dp, 2) + " places") + "</span></span>" +
+    (r.p_gain != null ? '<span class="kv">better in <span>' + pct(r.p_gain) + "</span></span>" : "") + "</div>" +
+    (v.plan ? "<p>plan A: " + esc(v.plan) + " &rarr; P" + num(v.exp_pos, 1) + " (P" + num(v.p10, 0) + "-P" + num(v.p90, 0) + ")</p>" : "") +
+    (r.notes || []).map((n) => "<p>" + esc(n) + "</p>").join("");
+}
+$("wiform").addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (wiBusy) return;
+  wiBusy = true; $("wibtn").disabled = true;
+  $("wiout").innerHTML = '<div class="empty">simulating...</div>';
+  fetch("/api/whatif", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({car: $("wicar").value, stop_lap: +$("wilap").value, compound: $("wicomp").value || null})})
+    .then((r) => r.json()).then((r) => { $("wiout").innerHTML = wiResult(r); })
+    .catch(() => { $("wiout").innerHTML = '<div class="empty">the pit wall did not answer</div>'; })
+    .then(() => { wiBusy = false; $("wibtn").disabled = false; });
+});
+// call history: /api/calls, refetched when the lap or the calls change
+let callsLog = [], callsSig = "", callsBusy = false;
+const CALL_COL = {BOX: "var(--red)", PREPARE_BOX: "var(--orange)", BOX_IF_SC: "var(--purple)", STAY_OUT: "var(--green)"};
+function drawCalls(s) {
+  const mine = [...focusSet()].filter((c) => (s.tower || []).some((r) => r.car === c)), total = s.total_laps || Math.max(s.lap || 1, 10);
+  if (!mine.length) { $("callhist").innerHTML = '<div class="empty">Pick a team to see its calls.</div>'; return; }
+  const tla = {};
+  for (const r of s.tower || []) tla[r.car] = r.tla || r.car;
+  const W = 320, L = 28, rh = 26, H = mine.length * rh + 18, x = (lap) => L + (W - L - 6) * (lap - 1) / Math.max(1, total - 1), kids = [];
+  const real = (r) => r.kind === "call" && r.action !== "NO_CALL";
+  mine.forEach((c, i) => {
+    const y = 4 + i * rh + rh / 2;
+    kids.push(svgEl("text", {x: 0, y: y + 3}, [tla[c] || c]), svgEl("line", {class: "grid", x1: L, x2: W - 6, y1: y, y2: y}));
+    callsLog.filter((r) => real(r) && r.car === c).forEach((r, j) => {
+      const lap = r.lap || 1, dot = svgEl("circle", {cx: x(lap), cy: y + (j % 2 ? 5 : -5), r: 4.5, fill: CALL_COL[r.action] || "var(--blue)"});
+      dot.appendChild(svgEl("title", {}, ["lap " + lap + ": " + r.action.replace(/_/g, " ") + (r.compound ? " " + r.compound : "")]));
+      kids.push(dot);
+    });
+  });
+  for (let l = 1; l <= total; l += l === 1 ? 9 : 10) kids.push(svgEl("text", {x: x(l), y: H - 3, "text-anchor": "middle"}, [String(l)]));
+  if (s.lap) kids.push(svgEl("line", {class: "now", x1: x(s.lap), x2: x(s.lap), y1: 0, y2: H - 12}));
+  const n = callsLog.filter((r) => real(r) && mine.includes(r.car)).length;
+  $("callhist").textContent = "";
+  $("callhist").appendChild(chartSvg(W, H, kids));
+  $("callhist").insertAdjacentHTML("beforeend", '<div class="ch-leg">' + Object.entries(CALL_COL).map((c) => '<span><i style="background:' + c[1] + '"></i>' + c[0].replace(/_/g, " ").toLowerCase() + "</span>").join("") + "<span>" + n + " calls so far</span></div>");
+}
+function renderCallHistory(s) {
+  const sig = s.lap + ":" + (s.calls || []).map((c) => c.car + c.action).join(",");
+  if (sig === callsSig || callsBusy) return;
+  callsSig = sig;
+  callsBusy = true;
+  fetch("/api/calls").then((r) => r.json()).then((r) => { callsLog = r.log || []; }).catch(() => {}).then(() => { callsBusy = false; if (snap) drawCalls(snap); });
+}
+function renderCharts(s) {
+  if (tab !== "strategy" && window.innerWidth <= 760) return;  // phones show one tab at a time; redrawn when the tab opens
+  renderGaps(s); renderStints(s); syncWiCars(s); syncWiLap(s); renderCallHistory(s);
+}
+
 function render(s) {
   if (!s || s.waiting) return;
   s.extra = s.extra || {};
   snap = s;
-  syncTeamSel(s); renderHeader(s); renderQuali(s); renderTower(s); renderFocus(s); renderStrategy(s); renderCallbar(s); renderAlerts(s);
+  syncTeamSel(s); renderHeader(s); renderQuali(s); renderTower(s); renderFocus(s); renderStrategy(s); renderCharts(s); renderCallbar(s); renderAlerts(s);
   if (s.extra.team_radio) radioList = s.extra.team_radio;
   if (s.extra.positions) onPositions(s.extra.positions);
   renderMap(s); renderConvo(s);

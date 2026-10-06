@@ -361,6 +361,7 @@ def _plan_a(wall, state, car: str, F) -> tuple | None:
 
 def _stat(pos: np.ndarray) -> dict:
     return {"exp_pos": round(float(pos.mean()), 2), "sd": round(float(pos.std()), 2),
+            "p10": round(float(np.percentile(pos, 10)), 1), "p90": round(float(np.percentile(pos, 90)), 1),
             "p_top10": round(float((pos <= 10).mean()), 3), "p_podium": round(float((pos <= 3).mean()), 3)}
 
 
