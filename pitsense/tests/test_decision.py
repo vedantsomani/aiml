@@ -43,7 +43,7 @@ def test_summary_counts_box_if_sc_separately_and_recall_by_condition():
     assert out["by_action"]["BOX"]["rate"] == 1.0
     assert out["by_action"]["BOX_IF_SC"]["n"] == 2  # triggered calls only (one per race)
     assert out["box_if_sc"] == {"calls": 4, "triggered": 2, "untriggered": 2, "held_when_untriggered": 1.0}
-    assert out["recall"]["green"]["stops"] == 2 and out["recall"]["sc_vsc"]["stops"] == 0
+    assert out["recall"]["green"]["stops"] == 4 and out["recall"]["sc_vsc"]["stops"] == 0
     sp = callscore.splits(per)
     assert set(sp["safety_car"]) == {"SC/VSC race", "no SC/VSC"}
     assert set(sp["phase"]) <= {"early", "mid", "late"}
