@@ -29,8 +29,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import pickle
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
 
@@ -250,19 +251,42 @@ def settings_hash() -> str:
     return hashlib.sha1(blob.encode()).hexdigest()[:10]
 
 
+def _cache_path(slug: str, h: str):
+    return data_dir() / "scratch" / "decision" / f"{slug}_{h}.pkl"
+
+
+def _load_cached(slug: str, h: str) -> dict | None:
+    """A finished race from the cache; None if absent or unreadable (e.g. a run killed mid-write)."""
+    path = _cache_path(slug, h)
+    try:
+        return pickle.loads(path.read_bytes())
+    except FileNotFoundError:
+        return None
+    except Exception:  # truncated / corrupt: recompute
+        path.unlink(missing_ok=True)
+        return None
+
+
 def _cached_run(args) -> dict:
     slug, year, h, refresh = args
-    path = data_dir() / "scratch" / "decision" / f"{slug}_{h}.pkl"
-    if path.exists() and not refresh:
-        return pickle.loads(path.read_bytes())
+    if not refresh and (res := _load_cached(slug, h)) is not None:
+        return res
     res = run_race((slug, year))
+    path = _cache_path(slug, h)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(pickle.dumps(res))
+    tmp = path.with_suffix(f".tmp{os.getpid()}")
+    tmp.write_bytes(pickle.dumps(res))
+    os.replace(tmp, path)  # atomic: a killed run never leaves a half-written race behind
     return res
 
 
-def collect(year: int = 2026, *, jobs: int = 3, refresh: bool = False, races: list[str] | None = None) -> list[dict]:
-    """One replay per race, cached per race and settings in ``data/scratch/decision`` (re-scoring is free)."""
+def collect(year: int = 2026, *, jobs: int = 3, refresh: bool = False, races: list[str] | None = None,
+            verbose: bool = True) -> list[dict]:
+    """One replay per race, cached per race and settings in ``data/scratch/decision`` (re-scoring is free).
+
+    Resumable: each race is written atomically as soon as it finishes, so a killed run restarts with only the
+    races that were not done yet.
+    """
     from ..archive import downloaded_sessions
     from .strategy import bundle_for_year
 
@@ -270,11 +294,19 @@ def collect(year: int = 2026, *, jobs: int = 3, refresh: bool = False, races: li
     if races:
         refs = [r for r in refs if any(k in r.slug for k in races)]
     h = settings_hash()
-    todo = [r for r in refs if refresh or not (data_dir() / "scratch" / "decision" / f"{r.slug}_{h}.pkl").exists()]
+    done = {} if refresh else {r.slug: x for r in refs if (x := _load_cached(r.slug, h)) is not None}
+    todo = [r for r in refs if r.slug not in done]
+    if verbose:
+        print(f"decision {year}: {len(refs)} races, {len(done)} cached, {len(todo)} to run (settings {h})", flush=True)
     if todo:
         bundle_for_year(year)  # train once here, not in every worker
-    with ProcessPoolExecutor(max_workers=jobs) as ex:
-        return list(ex.map(_cached_run, [(r.slug, year, h, refresh) for r in refs]))
+        with ProcessPoolExecutor(max_workers=jobs) as ex:
+            futs = {ex.submit(_cached_run, (r.slug, year, h, refresh)): r.slug for r in todo}
+            for i, f in enumerate(as_completed(futs), 1):
+                done[futs[f]] = f.result()
+                if verbose:
+                    print(f"decision {year}: {i}/{len(todo)} {futs[f]} ({len(done[futs[f]]['moments'])} moments)", flush=True)
+    return [done[r.slug] for r in refs]
 
 
 # --------------------------------------------------------------------------- scoring

@@ -115,3 +115,16 @@ def test_holdout_audit_passes_and_report_renders(tmp_path):
     rep = report_all.assemble({}, test_year=2026)
     md = report_all.render_md(rep)
     assert "Provenance" in md and "Hold-out audit" in md
+
+
+def test_race_cache_is_atomic_and_survives_a_corrupt_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("PITSENSE_DATA", str(tmp_path))
+    monkeypatch.setattr(decision, "run_race", lambda args: {"slug": args[0], "moments": [1]})
+    assert decision._load_cached("x", "h") is None
+    p = decision._cache_path("x", "h")
+    p.parent.mkdir(parents=True)
+    p.write_bytes(b"\x80truncated")  # a run killed mid-write (old non-atomic writer)
+    assert decision._load_cached("x", "h") is None and not p.exists()
+    assert decision._cached_run(("x", 2026, "h", False))["moments"] == [1]
+    assert decision._load_cached("x", "h")["slug"] == "x"
+    assert not list(p.parent.glob("*.tmp*"))
