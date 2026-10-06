@@ -286,6 +286,7 @@ class PitWallRuntime:
         self._radio_sig: tuple = ()
         self.voice = None if os.environ.get("PITSENSE_VOICE", "") != "off" else False  # loaded on first call
         self._seen_alerts: set[tuple] = set()
+        self._last_alarms: list[str] = []  # track previous alarms to detect changes
         self._wall_t0 = time.time()
         self._log_fh = None
         self.log_path: Path | None = None
@@ -447,6 +448,7 @@ class PitWallRuntime:
         self.snap_ms.append(ms)
         self._last_pub_t, self._last_pub_lap = state.t, state.current_lap
         self.n_snapshots += 1
+        self._log_alarms_if_changed()  # print to console if alarms change
         with self.lock:
             self.latest, self.latest_bytes = d, payload
         self._notify({"event": "snapshot", "data": payload})
@@ -668,15 +670,51 @@ class PitWallRuntime:
                     pass
 
     # --------------------------------------------------------------- API views
+    def _check_alarms(self) -> list[str]:
+        """Compute current health alarms: model not loaded, no calls after 5 laps, feed stale >30s, engineer errors."""
+        now = time.time()
+        last_event_age = None if self.last_event_wall is None else (now - self.last_event_wall)
+
+        alarms = []
+        if self.state.session_status == "Started" and self.state.current_lap >= 5:
+            # Check if no calls have been produced for focus cars after 5 laps
+            if not self.calls_log:
+                alarms.append("RED: No strategy calls produced after 5 laps (may indicate strategy bug)")
+
+        if self.use_models is True and not self.model_info.get("loaded"):
+            alarms.append("RED: Model bundle requested but not loaded")
+
+        if last_event_age is not None and last_event_age > 30:
+            alarms.append(f"RED: Feed stale for {last_event_age:.0f}s (>30s)")
+
+        if self.observe_errors > 0:
+            alarms.append(f"RED: {self.observe_errors} engineer errors")
+
+        return alarms
+
+    def _log_alarms_if_changed(self) -> None:
+        """Log to console when health alarms change (called during publish)."""
+        alarms = self._check_alarms()
+        if alarms != self._last_alarms:
+            self._last_alarms = alarms
+            if alarms:
+                for alarm in alarms:
+                    log.error(alarm)
+            else:
+                log.info("All health checks passed")
+
     def health(self) -> dict:
         ms = sorted(self.snap_ms)
         now = time.time()
+        last_event_age = None if self.last_event_wall is None else (now - self.last_event_wall)
+        alarms = self._check_alarms()
+
         return {
             "status": self.status, "error": self.error, "mode": self.source.mode,
             "title": self.source.title, "speed": self.source.speed,
             "t": round(self.state.t, 1), "lap": self.state.current_lap, "total_laps": self.state.total_laps,
             "events": self.n_events, "snapshots": self.n_snapshots,
-            "last_event_age_s": None if self.last_event_wall is None else round(now - self.last_event_wall, 1),
+            "last_event_age_s": None if self.last_event_wall is None else round(last_event_age, 1),
             "uptime_s": round(now - self.started_wall, 1),
             "inferred_order": self.inferred_order, "model": self.model_info,
             "viewers": len(self.listeners),
@@ -687,6 +725,7 @@ class PitWallRuntime:
             "recorder_error": getattr(self.source, "recorder_error", None),
             "radio": None if self.radio_worker is None else dict(self.radio_worker.stats, error=self.radio_worker.error),
             "track": None if self.track is None else ("provisional" if self.track.get("provisional") else "stored"),
+            "alarms": alarms,
         }
 
     def team_radio_file(self, car: str, i: int) -> Path | None:
