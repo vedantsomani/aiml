@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^cd \"C:\\\\Users\\\\vedan\\\\Downloads\\\\aiml\\\\pitsense\"; if \\(-not \\(Test-Path \"\\.venv\"\\)\\) \\{ py -3\\.12 -m venv \\.venv \\}; \\.\\\\\\.venv\\\\Scripts\\\\Activate\\.ps1; python -m pip install -e \"\\.\\[dev\\]\"; pitsense pitwall --live --team ferrari$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

@@ -327,7 +327,10 @@ def _field_for(wall, state, car: str, S: int):
     if d.laps < 2:
         return None, "too early: no laps to read pace from"
     view = wall.view(state)
-    if not bool(view.race("rules").get("race_dry", True)) or bool(view.race("weather").get("wet_running")):
+    # As the planner (strategy/analysis.py): race_dry stays off for good once anyone fitted inters, so a race
+    # that started wet and has dried is planned dry again. Refuse only while it is wet now or on wet tyres.
+    wx = view.race("weather")
+    if bool(wx.get("wet_running")) or (wx.get("rainfall") or 0) > 0 or d.compound in ("INTERMEDIATE", "WET"):
         return None, "wet conditions: the simulator only models dry tyres"
     key = (id(state), state.t, d.laps, S)
     hit = ctx.__dict__.get("_whatif_field")
