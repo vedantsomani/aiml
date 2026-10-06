@@ -122,7 +122,9 @@ def test_seek_beyond_the_end_is_clamped_and_future_is_gone():
 def test_pause_resume():
     rt = PitWallRuntime(ReplaySource(make_log(), 200), models=False)  # slow enough to catch mid-race
     rt.start()
-    time.sleep(0.4)
+    deadline = time.time() + 30  # wait for the replay to start: a fixed sleep flaked on a loaded machine
+    while rt.n_events == 0 and time.time() < deadline:
+        time.sleep(0.02)
     assert rt.replay_pause()["paused"]
     time.sleep(0.1)
     n = rt.n_events
