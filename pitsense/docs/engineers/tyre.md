@@ -109,3 +109,22 @@ Baselines in those tasks are unchanged. The gains are small; position_after_stop
 * RMSE is dominated by a few laps after red-flag restarts; compare MAE.
 * `cliff_risk` as a fixed formula is weakly calibrated-skilled (Brier skill 0.02); the learned
   `cliff_gbm` is better but is a benchmark model, not an engineer value.
+
+## Race-start prior: circuit history and practice long runs (`practice.py`)
+
+Before the race has laps, the field model starts from defaults, shrunk (by precision) toward the circuit's
+earlier races (`summarize_race` stores each race's compound slopes and offsets) and toward the weekend's
+Practice 1-3 long runs (>= 5 consecutive clean laps on one set; only sessions that started before the race,
+read from disk). In-race laps take over because the prior enters the field fit as pseudo-observations.
+Practice compound offsets are computed but not used (corr < 0 vs race on 2025: fuel and run order differ by
+compound). Missing practice (sprint weekend, wet FP, not downloaded) falls back to history, then defaults.
+
+First 10 laps of each dry stint, MAE (bench rows, vs no prior; tuned on 2025, 2026 scored once):
+
+| | pace_s vs next lap (s) | net slope (deg - fuel) vs realised stint slope (s/lap) |
+|---|---|---|
+| 2025 before / after | 0.4660 / 0.4662 | 0.0448 / 0.0416 |
+| 2026 before / after | 0.7299 / 0.7348 | 0.0585 / 0.0566 |
+
+Slope error improves on both years; lap-time error is flat in 2025 and slightly worse in 2026 (new cars:
+2022-25 circuit history is less valid). Circuit history gives most of the gain (2025 slope 0.0422 alone).

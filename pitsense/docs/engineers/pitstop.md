@@ -108,3 +108,11 @@ the base features and history priors were not touched. `bench build` time 25 s -
 - `penalty_s_pending` comes from `rules` (0 until that engineer fills it).
 - Pass-through is detected from race-control messages; if the wording changes, `pass_through` reads False.
 - Pit-entry rows under pass-through are mostly drive-throughs; the benchmark model assumes so, the engineer's `rejoin_if_box_now` still answers "if we really stopped".
+
+## Crew prior (stationary time per team)
+
+A team's stationary time against the field is the decay-weighted median (0.9 per race) of its deviations from
+each earlier race's median, shrunk by n / (n + 6) toward the field, with renamed crews merged (Kick Sauber =
+Audi, AlphaTauri = RB = Racing Bulls). This race's stops join as the latest race. Tuned on 2025: stationary-time
+MAE 0.929 (field) / 0.912 (old median rule) -> 0.899. Stop-loss MAE is dominated by measurement noise (about 2 s)
+and does not move: 2025 all-stops 2.719 -> 2.717, 2026 3.420 -> 3.425 (pit_entry rows, `y_pit_loss`).
