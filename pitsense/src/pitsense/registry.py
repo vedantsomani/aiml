@@ -21,6 +21,7 @@ ENGINEERS: list[str] = [
     "pitsense.pitwall.engineers.mechanic_telemetry:MechanicTelemetry",
     "pitsense.pitwall.engineers.mechanic_radio:MechanicRadio",
     "pitsense.pitwall.engineers.mechanic_chief:MechanicChief",
+    "pitsense.pitwall.engineers.incidents:IncidentsEngineer",
     "pitsense.pitwall.engineers.tyresets:TyreSetsEngineer",
     "pitsense.pitwall.engineers.quali:QualiEngineer",
     "pitsense.pitwall.engineers.safetycar:SafetyCarEngineer",
@@ -65,6 +66,7 @@ LABELERS: list[str] = [
 COMMANDS: list[str] = [
     "pitsense.bench.rules:add_commands",
     "pitsense.bench.mechanics:add_commands",
+    "pitsense.bench.incidents:add_commands",
     "pitsense.bench.rivalradio:add_commands",
     "pitsense.modelstore:add_commands",
     "pitsense.pitwall.runtime:add_commands",

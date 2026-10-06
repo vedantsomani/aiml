@@ -31,6 +31,19 @@ def _phi(z: float) -> float:
     return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
 
 
+DAMAGE_BOX = 0.15  # incidents.damage_prob for a BOX call: on 2025 only 2 car-laps reach it, one of them followed by an unplanned stop (bench/incidents.py)
+
+
+def damage_call(t: float, car: str, inc: dict, pit_open: bool = True) -> Call | None:
+    """A BOX call (with the reason) when the incidents engineer says a stop is likely, else None."""
+    p = inc.get("damage_prob")
+    if not isinstance(p, (int, float)) or p < DAMAGE_BOX or not pit_open:
+        return None
+    why = inc.get("incident_reason") or "several signs of damage"
+    return Call(t=t, car=car, action="BOX", confidence=round(min(0.95, float(p)), 2),
+                reasons=(Reason("damage", f"suspected damage or puncture: {why} (probability {p:.0%})", round(float(p), 2)),))
+
+
 def pick_plan(a, prev_target: int | None):
     """Plan A: the best plan, unless last lap's target stop lap is still nearly as good (hysteresis)."""
     best = a.ranked[0]
@@ -234,7 +247,7 @@ def _decide(a, prev_target, pit_open, sc_phase, prev_call, sc_prob, ctl, stops_d
 
 class HeadOfStrategy(Engineer):
     name = "head"
-    requires = ("pitstop", "rules", "strategy")
+    requires = ("pitstop", "rules", "strategy", "incidents")
     in_bench = False
 
     def __init__(self, ctx, memory) -> None:
@@ -255,6 +268,11 @@ class HeadOfStrategy(Engineer):
             d = state.drivers[n]
             t = round(state.t, 3)
             ctl = self._ctl.setdefault(n, {})
+            dmg = None if d.in_pit else damage_call(t, n, view.car("incidents", n), rules.get("pit_lane_open") is not False)
+            if dmg is not None:  # unplanned stop: overrides the plan
+                self._last[n] = "BOX"
+                out.append(dmg)
+                continue
             ev = wethead.field_event(self.memory, state, view, d)
             if a is not None and not a.ok and a.why.startswith("wet conditions"):  # no wet model (or engine off): the naive rain-flag rule
                 action, comp, rs = wethead.naive_call(view, state, n, priors_for(self.ctx))
