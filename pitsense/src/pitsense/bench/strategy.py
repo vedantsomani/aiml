@@ -90,13 +90,20 @@ def _patch_decide(trace: list, cur: dict) -> None:
 
     orig = getattr(head, "_decide_orig", None) or head.decide
     head._decide_orig = orig
+    shared: dict = {}  # one cached analysis is asked many times a lap: keep one copy of its plans
 
     def rec(a, prev_target, **kw):
         out = orig(a, prev_target, **kw)
         if a.plan_a is not None and a.ranked:
-            trace.append({"drv": cur["drv"], "car_lap": cur["lap"], "car": a.car, "prev_target": prev_target, "kw": dict(kw),
-                          "ranked": [(r.util, r.stops, r.first_offset) for r in a.ranked], "dnl": a.diff_now_later,
-                          "pp": a.pp, "ps": a.ps, "gain_sc": a.gain_sc, "sc_comp": a.sc_best_comp, "anchor": a.anchor, "out": out[0]})
+            ranked = shared.get(id(a.ranked))
+            if ranked is None:
+                shared.clear()
+                ranked = shared[id(a.ranked)] = [(r.util, r.stops, r.first_offset) for r in a.ranked]
+            trace.append({"drv": cur["drv"], "car_lap": cur["lap"], "car": a.car, "prev_target": prev_target,
+                          "kw": {k: v for k, v in kw.items() if k != "ctl"},
+                          "ranked": ranked, "dnl": a.diff_now_later,
+                          "pp": a.pp, "ps": a.ps, "gain_sc": a.gain_sc, "sc_comp": a.sc_best_comp, "anchor": a.anchor,
+                          "out": out[0], "comp": out[1], "rule": out[3]})
         return out
 
     head.decide = rec
@@ -106,12 +113,13 @@ def replay_calls(trace: list[dict], final: RaceState, top5, decide_fn, k: int = 
     """Re-run ``decide_fn`` over a recorded trace (same hysteresis chain) and return the logged calls as the bench logs them."""
     from types import SimpleNamespace as NS
 
-    last, calls, last_key = {}, [], {}
+    last, calls, last_key, ctl = {}, [], {}, {}
     for r in trace:
         a = NS(plan_a=True, car=r["car"], anchor=r["anchor"], ranked=[NS(util=u, stops=s, first_offset=o) for u, s, o in r["ranked"]],
                diff_now_later=r["dnl"], pp=r["pp"], ps=r.get("ps"), gain_sc=r["gain_sc"], sc_best_comp=r["sc_comp"])
         kw = dict(r["kw"])
         kw["prev_call"] = last.get(r["car"])
+        kw["ctl"] = ctl.setdefault(r["car"], {})
         act, comp = decide_fn(a, r["prev_target"], **kw)[:2]
         last[r["car"]] = act
         if r["car"] != r["drv"]:
@@ -127,6 +135,7 @@ def run_race(args) -> dict:
     """Replay one race: forecasts at the anchors, head calls for the top-5 finishers."""
     slug, year, stride, S, calls_on = args[:5]
     use_models = bool(args[5]) if len(args) > 5 else False
+    every = bool(args[6]) if len(args) > 6 else False  # every classified car, the pit wall's light mode (no team set)
     ref = next(r for r in downloaded_sessions() if r.slug == slug)
     from . import history as H
 
@@ -139,9 +148,9 @@ def run_race(args) -> dict:
     total = final.total_laps or 0
     classified = [d for d in final.running_order() if d.running and d.laps >= 0.9 * total]
     y_pos = {d.number: d.position for d in classified}
-    top5 = tuple(d.number for d in classified[:5])
+    top5 = tuple(d.number for d in (classified if every else classified[:5]))
     ctx = Context.for_race(prior, ref.to_dict(), history=hist, race_start_utc=ref.start_utc,
-                           team=TeamConfig(cars=top5 if calls_on else ()),
+                           team=TeamConfig(cars=() if every else top5 if calls_on else ()),
                            models=bundle_for_year(year) if use_models else None)
     wall = PitWall(ctx)
     state = RaceState(log.meta)
@@ -153,7 +162,7 @@ def run_race(args) -> dict:
     for pe in final.pit_events:
         if not pe.under_red:
             stops.setdefault(pe.driver, []).append(pe.in_lap)
-    anchors = [int(round(f * total)) for f in FRACS]
+    anchors = [] if every else [int(round(f * total)) for f in FRACS]
     done: set[int] = set()
     fc_rows, ns_rows, calls, last_key = [], [], [], {}
     t_calls, n_calls = 0.0, 0
@@ -188,7 +197,7 @@ def run_race(args) -> dict:
            "stops": {k: stops.get(k, []) for k in top5}, "trace": trace, "calls_s": t_calls / max(n_calls, 1)}
     if calls_on:
         res["shadow"] = shadow_score(calls, final, 2, set(top5))
-        out_dir = data_dir() / "scratch" / "calls"
+        out_dir = data_dir() / "scratch" / ("calls_all" if every else "calls")
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / f"calls-{slug}.jsonl").write_text("\n".join(json.dumps(c) for c in calls), encoding="utf-8")
     return res
@@ -230,13 +239,14 @@ def _races(year: int):
 
 
 def collect(year: int, *, jobs: int = 3, stride: int = 2, S: int = 192, calls_on: bool = True, refresh: bool = False,
-            models: bool = True) -> list[dict]:
-    cache = data_dir() / "scratch" / f"strategy_{year}_{stride}_{S}_{int(calls_on)}{'_m' if models else ''}.pkl"
+            models: bool = True, every: bool = False, tag: str = "") -> list[dict]:
+    """Replay every race of ``year``. ``every``: calls for all classified cars (the pit wall's light mode) instead of the top 5."""
+    cache = data_dir() / "scratch" / f"strategy_{year}_{stride}_{S}_{int(calls_on)}{'_m' if models else ''}{'_all' if every else ''}{tag}.pkl"
     if cache.exists() and not refresh:
         return pickle.loads(cache.read_bytes())
     if models:
         bundle_for_year(year)  # train once here, not in every worker
-    jobs_ = [(r.slug, year, stride, S, calls_on, models) for r in _races(year)]
+    jobs_ = [(r.slug, year, stride, S, calls_on, models, every) for r in _races(year)]
     with ProcessPoolExecutor(max_workers=jobs) as ex:
         out = list(ex.map(run_race, jobs_))
     cache.parent.mkdir(parents=True, exist_ok=True)
@@ -310,6 +320,73 @@ def strategy_tasks(**_) -> list[Task]:
     return [mk("strategy_finish", _finish), mk("strategy_nextstop", _nextstop), mk("strategy_calls", _calls)]
 
 
+# --------------------------------------------------------------------------- per-race call scoring
+def score_race(calls: list[dict], stops: dict[str, list[int]], cars, k: int = 2) -> dict:
+    """``runtime.shadow_score`` on a recorded call list and real stops, plus the signed timing error of BOX calls
+    (call lap minus the nearest real stop of that car within 8 laps; negative: early)."""
+    cars = set(cars)
+    lap_of = lambda c: int(c.get("car_lap") or c.get("lap") or 0)  # noqa: E731
+    box = [c for c in calls if c["action"] in ("BOX", "PREPARE_BOX", "BOX_IF_SC") and c["car"] in cars]
+    stay = [c for c in calls if c["action"] == "STAY_OUT" and c["car"] in cars]
+    hit = [any(abs(s - lap_of(c)) <= k for s in stops.get(c["car"], [])) for c in box]
+    ok = [not any(0 <= s - lap_of(c) <= k for s in stops.get(c["car"], [])) for c in stay]
+    real = [(car, s) for car in cars for s in stops.get(car, [])]
+    covered = [any(c["car"] == car and abs(s - lap_of(c)) <= k for c in box) for car, s in real]
+    err, prev = [], {}
+    for c in calls:  # first call of each run of BOX calls
+        if c["car"] not in cars:
+            continue
+        run = prev.get(c["car"]) == "BOX"
+        prev[c["car"]] = c["action"]
+        if c["action"] == "BOX" and not run:
+            near = [lap_of(c) - s for s in stops.get(c["car"], []) if abs(lap_of(c) - s) <= 8]
+            if near:
+                err.append(min(near, key=abs))
+    by = {a: [h for c, h in zip(box, hit) if c["action"] == a] for a in ("BOX", "PREPARE_BOX", "BOX_IF_SC")}
+    return {"box_n": len(box), "box_hit": int(sum(hit)), "stay_n": len(stay), "stay_ok": int(sum(ok)), "real": len(real),
+            "covered": int(sum(covered)), "BOX_n": len(by["BOX"]), "BOX_hit": int(sum(by["BOX"])),
+            "PREP_n": len(by["PREPARE_BOX"]), "PREP_hit": int(sum(by["PREPARE_BOX"])), "err": err,
+            "boxes": sum(1 for c in box if c["action"] == "BOX")}
+
+
+def race_scores(results: list[dict], decide_fn=None, k: int = 2) -> list[dict]:
+    """Per-race scores for all cars in the results; ``decide_fn`` re-scores the recorded trace with another head rule."""
+    out = []
+    for r in results:
+        calls = r["calls"] if decide_fn is None else replay_calls(r["trace"], None, r["top5"], decide_fn, k)
+        out.append(dict(score_race(calls, r["stops"], r["top5"], k), race=r["slug"]))
+    return out
+
+
+def aggregate(rows: list[dict], boot: int = 2000, seed: int = 0) -> dict:
+    """Micro-averaged precision / recall / stay-out accuracy over races with a 90 % bootstrap interval over races."""
+    ratios = {"precision": ("box_hit", "box_n"), "recall": ("covered", "real"), "stay_out": ("stay_ok", "stay_n"),
+              "box_precision": ("BOX_hit", "BOX_n"), "prep_precision": ("PREP_hit", "PREP_n")}
+    arr = {k: np.array([[r[a], r[b]] for r in rows], dtype=float) for k, (a, b) in ratios.items()}
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, len(rows), (boot, len(rows)))
+    out = {}
+    for k, v in arr.items():
+        point = v[:, 0].sum() / max(v[:, 1].sum(), 1)
+        bs = v[idx][:, :, 0].sum(1) / np.maximum(v[idx][:, :, 1].sum(1), 1)
+        out[k] = (round(float(point), 3), round(float(np.percentile(bs, 5)), 3), round(float(np.percentile(bs, 95)), 3))
+    err = np.array([e for r in rows for e in r["err"]], dtype=float)
+    out["timing_err"] = (round(float(np.median(err)), 2) if err.size else None, round(float(err.mean()), 2) if err.size else None, int(err.size))
+    out["calls"] = (int(sum(r["box_n"] for r in rows)), int(sum(r["real"] for r in rows)), int(sum(r["boxes"] for r in rows)))
+    return out
+
+
+def print_rows(rows: list[dict], agg: dict | None = None) -> None:
+    f = lambda a, b: f"{a}/{b}".rjust(7)  # noqa: E731
+    print("race".ljust(40), "box".rjust(7), "BOX".rjust(7), "recall".rjust(7), "stay".rjust(7), "med err")
+    for r in rows:
+        e = float(np.median(r["err"])) if r["err"] else float("nan")
+        print(r["race"][:40].ljust(40), f(r["box_hit"], r["box_n"]), f(r["BOX_hit"], r["BOX_n"]), f(r["covered"], r["real"]),
+              f(r["stay_ok"], r["stay_n"]), f"{e:6.1f}")
+    if agg:
+        print({k: v for k, v in agg.items()})
+
+
 # --------------------------------------------------------------------------- leak test
 def leakcheck(year: int, race: str, cuts: int = 3, seed: int = 0, cars: tuple = ()) -> list[dict]:
     """Plans and calls at time t must be identical built from the full log and from ``log.until(t)``.
@@ -359,3 +436,16 @@ def add_commands(sub) -> None:
     s.add_argument("--seed", type=int, default=0)
     s.add_argument("--cars", nargs="+")
     s.set_defaults(fn=_cmd_leak)
+
+
+if __name__ == "__main__":  # python -m pitsense.bench.strategy collect|report YEAR [tag] [--top5]
+    import sys
+
+    cmd, yr = sys.argv[1], int(sys.argv[2])
+    tag = next((a for a in sys.argv[3:] if not a.startswith("--")), "")
+    every = "--top5" not in sys.argv
+    if cmd == "collect":
+        collect(yr, jobs=3, every=every, tag=tag, refresh="--refresh" in sys.argv)
+    else:
+        rows = race_scores(collect(yr, every=every, tag=tag))
+        print_rows(rows, aggregate(rows))

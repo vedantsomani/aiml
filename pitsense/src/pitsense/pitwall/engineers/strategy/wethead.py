@@ -123,3 +123,67 @@ def naive_call(view, state, number: str, pri):
         txt = f"crossover reached: slicks {abs(d_s):.1f} s/lap faster; " if isinstance(d_s, (int, float)) else ""
         return "BOX", slick_compound(pri, left), [Reason("rain_flag", f"BOX for SLICKS: {txt}rain flag down for {since:.0f} min", round(float(since), 1))]
     return "STAY_OUT", None, [Reason("rain_flag", "no tyre-class switch signalled by the rain flag")]
+
+
+# --------------------------------------------------------------------------- field events: the field changes tyre class
+def _cls(c: str | None) -> str | None:
+    return "S" if c in ("SOFT", "MEDIUM", "HARD") else "I" if c in ("INTERMEDIATE", "WET") else None
+
+
+def field_event(memory, state, view, d):
+    """What the field did in the last 2 laps and what it says for car ``d``: dict with the counts of cars that changed
+    tyre class, the crossover and ``target`` (None, "INTERMEDIATE" or "SLICKS"). None when nothing is known."""
+    import math
+
+    from .analysis import SETTINGS as S
+
+    n = to_s = to_i = 0
+    for x in state.drivers.values():
+        if not x.running:
+            continue
+        n += 1
+        prev = memory.index.by_driver.get(x.number, {}).get(x.laps - 2)
+        a, b = _cls(prev.compound) if prev is not None else None, _cls(x.compound)
+        to_s += a == "I" and b == "S"
+        to_i += a == "S" and b == "I"
+    w = view.race("weather")
+    cross, dl = w.get("crossover"), w.get("inters_vs_slicks_s")
+    mine = _cls(d.compound)
+    need = max(S["sw_min"], math.ceil(S["sw_share"] * n))
+    big = max(3, math.ceil(0.3 * n))
+    dl = dl if isinstance(dl, (int, float)) else None
+    target = None
+    if mine == "S" and to_i and (to_i >= big or (cross == "to_inters" and dl is not None and dl <= -S["sw_delta_s"]
+                                                 and (to_i >= need or dl <= -5.0))):
+        target = "INTERMEDIATE"
+    elif mine == "I" and to_s and (to_s >= big or (cross == "to_slicks" and dl is not None and dl >= S["sw_delta_s"] and to_s >= need)):
+        target = "SLICKS"
+    return {"n": n, "to_slicks": to_s, "to_inters": to_i, "cross": cross, "delta": dl, "target": target}
+
+
+def apply_event(ev, action, comp, reasons, ctl, lap, pri, state):
+    """Override a wet-path call with the field event (BOX for the class the field switched to), then let a BOX that
+    has not been acted on for ``box_ttl`` laps decay to PREPARE_BOX. Returns (action, compound, reasons)."""
+    from .analysis import SETTINGS as S
+
+    reasons = list(reasons)
+    if ev is not None and ev["target"] is not None:
+        tgt = ev["target"]
+        left = max((state.total_laps or 60) - lap, 1)
+        comp = slick_compound(pri, left) if tgt == "SLICKS" else tgt
+        k = ev["to_slicks"] if tgt == "SLICKS" else ev["to_inters"]
+        what = "slicks" if tgt == "SLICKS" else "inters"
+        txt = f"{k} cars switched to {what} in the last 2 laps"
+        if ev["delta"] is not None and ev["cross"] not in (None, "none"):
+            txt += f"; {abs(ev['delta']):.1f} s/lap {'faster on ' + what}"
+        action = "BOX"
+        reasons = [Reason("field_switch", f"BOX for {NAME['SLICKS' if tgt == 'SLICKS' else 'INTERMEDIATE']}: {txt}", k)] + reasons
+    if action == "BOX":
+        last = ctl.get("w_last")
+        if last is None or lap - last > S["box_ttl"] + 2:
+            ctl["w_lap"] = lap
+        ctl["w_last"] = lap
+        if lap - ctl["w_lap"] >= S["box_ttl"]:
+            action = "PREPARE_BOX"
+            reasons = [Reason("box_decay", f"BOX called on lap {ctl['w_lap']} and not taken: holding it", ctl["w_lap"])] + reasons
+    return action, comp, reasons

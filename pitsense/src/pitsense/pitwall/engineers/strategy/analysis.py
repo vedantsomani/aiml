@@ -52,6 +52,20 @@ SETTINGS = {
     "hold": 0.7,  # a box call made last lap is held down to this share of the thresholds
     "use_wet_engine": True,  # wet / mixed races: tyre-class calls from the wet simulator (False: NO_CALL as before the wet work)
     "tol_keep": 0.05,  # keep last lap's target stop lap unless the best plan is better by more than this
+    # call stability and events (head.stabilise / head.sc_reaction; see "Call quality pass" in docs/engineers/strategy.md)
+    "box_ttl": 2,  # a BOX not acted on within this many laps decays to PREPARE_BOX / STAY_OUT
+    "box_cool": 3,  # laps after a decay in which BOX is not called again (PREPARE_BOX instead) ...
+    "box_q": 0.15,  # ... unless P(stop within 1 lap) rose by this much since the decay
+    "comp_tol": 0.10,  # a called compound is kept while the plan for it is within this many places of the best
+    "comp_ttl": 5,  # a compound lock lapses after this many laps without a box call
+    "sane_places": 6.0,  # a forecast finish further than this from the current position is not trusted for BOX
+    "sc_event": True,  # SC / VSC deployed and the car in its window: BOX now
+    "sc_window": 8,  # laps: the car's plan stops within this many laps (or P(stop within 8) is high) = in its window
+    "sc_tol": 0.5,  # places: stopping now costs at most this much against the best plan
+    "sc_p8": 0.5,  # P(stop within 8 laps) from the models counts as in the window too
+    "sw_min": 2,  # field switches: at least this many cars ...
+    "sw_share": 0.10,  # ... and this share of the running field changed tyre class in the last 2 laps
+    "sw_delta_s": 1.0,  # |inters_vs_slicks_s| at least this much for the crossover to count
 }
 PACE_BAND = (0.04, 0.06)  # a car's expected lap time stays within -4 % / +6 % of the field median (drying or wet tracks make single stints outliers)
 OFFS1 = (0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 17, 20, 24, 28, 33, 38, 44, 50, 58)
