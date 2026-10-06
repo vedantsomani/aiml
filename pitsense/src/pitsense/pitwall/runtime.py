@@ -997,6 +997,90 @@ def _lan_ip() -> str:
         return "<this-computer-ip>"
 
 
+def cmd_doctor(a) -> None:
+    """Pre-race check: model bundle, Whisper, Piper, disk space, smoke test."""
+    import shutil
+    from .. import archive
+    from ..state import replay
+
+    print("PitSense pre-race check")
+    print("-" * 40)
+
+    checks = []
+
+    # 1. Model bundle available
+    try:
+        from ..modelstore import latest_bundle_for
+        from datetime import datetime, timezone
+        bundle = latest_bundle_for(datetime.now(timezone.utc))
+        checks.append(("Model bundle", "OK" if bundle else "FAIL", ""))
+    except Exception as e:
+        checks.append(("Model bundle", "FAIL", str(e)))
+
+    # 2. Whisper importable
+    try:
+        import faster_whisper
+        checks.append(("Whisper (faster-whisper)", "OK", ""))
+    except ImportError:
+        checks.append(("Whisper (faster-whisper)", "FAIL", "pip install faster-whisper"))
+
+    # 3. Piper voice files present
+    try:
+        from ..voice import tts as voice_tts
+        if voice_tts.available():
+            voice_path = voice_tts.voice_dir() / (voice_tts.DEFAULT_VOICE + ".onnx")
+            if voice_path.exists():
+                checks.append(("Piper voice files", "OK", f"{voice_tts.DEFAULT_VOICE}"))
+            else:
+                checks.append(("Piper voice files", "WARN", f"run: python -m piper.download_voices {voice_tts.DEFAULT_VOICE}"))
+        else:
+            checks.append(("Piper voice files", "FAIL", "pip install piper-tts"))
+    except Exception as e:
+        checks.append(("Piper voice files", "FAIL", str(e)))
+
+    # 4. Disk space
+    try:
+        data_dir = Path(os.environ.get("PITSENSE_DATA", "data"))
+        stat = shutil.disk_usage(data_dir)
+        free_gb = stat.free / (1024 ** 3)
+        if free_gb > 1:
+            checks.append(("Disk space", "OK", f"{free_gb:.1f} GB free"))
+        else:
+            checks.append(("Disk space", "WARN", f"only {free_gb:.1f} GB free"))
+    except Exception as e:
+        checks.append(("Disk space", "FAIL", str(e)))
+
+    # 5. Smoke test: replay a short race
+    try:
+        ref = archive.find_session(2026, "hungary", "Race")
+        if not (ref.local_dir / "TimingData.jsonStream").exists():
+            checks.append(("Smoke test (replay)", "SKIP", "Hungary 2026 not downloaded"))
+        else:
+            log = load_with_feeds(ref.local_dir)
+            state = replay(log)
+            if state.current_lap >= 3 and len(state.laps) > 0:
+                checks.append(("Smoke test (replay)", "OK", f"{len(state.laps)} laps"))
+            else:
+                checks.append(("Smoke test (replay)", "FAIL", "replay did not produce laps"))
+    except Exception as e:
+        checks.append(("Smoke test (replay)", "FAIL", str(e)[:60]))
+
+    # Print results
+    max_name = max(len(name) for name, _, _ in checks)
+    for name, status, detail in checks:
+        icon = "✓" if status == "OK" else "✗" if status == "FAIL" else "⚠"
+        print(f"{icon} {name:<{max_name}} {status:<4} {detail}")
+
+    # Overall status
+    failed = [name for name, status, _ in checks if status == "FAIL"]
+    if failed:
+        print(f"\nFAIL: {len(failed)} check(s) failed")
+        import sys
+        sys.exit(1)
+    else:
+        print("\nOK: Ready for race day")
+
+
 def cmd_pitwall(a) -> None:
     from ..config import data_dir
     from ..web.server import serve
@@ -1078,3 +1162,6 @@ def add_commands(sub) -> None:
     s.add_argument("--cars", nargs="+", help="only these car numbers")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_shadow_score)
+
+    s = sub.add_parser("doctor", help="pre-race checks: model, Whisper, Piper, disk space, smoke test")
+    s.set_defaults(fn=cmd_doctor)
