@@ -105,7 +105,7 @@ def options(a) -> dict:
 
 class StrategyEngineer(Engineer):
     name = "strategy"
-    requires = ("tyre", "pitstop", "rivals", "rules", "weather", "models")
+    requires = ("tyre", "pitstop", "rivals", "rules", "weather", "models", "tyresets")
     in_bench = False
 
     @classmethod
@@ -146,7 +146,7 @@ class StrategyEngineer(Engineer):
         out = {}
         for n, a in get_analysis(self.ctx, self.memory, state, view).items():
             if a.ok and a.plan_a is not None:
-                out[n] = {**options(a), "stop_dist": [round(float(x), 3) for x in a.stop_p]}
+                out[n] = {**options(a), "sets_note": a.sets_note, "stop_dist": [round(float(x), 3) for x in a.stop_p]}
         return out
 
     def race(self, state, view):

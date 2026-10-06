@@ -19,6 +19,7 @@ from .priors import DRY, LIFE, Priors
 from .run import FieldRun, evaluate_plans, simulate_field
 from .sim import K_STOPS, NOSTOP, Draws, FieldIn
 from . import wetobs
+from .... import weekend
 
 POINTS = np.array([25, 18, 15, 12, 10, 8, 6, 4, 2, 1], dtype=float)
 COMP_NAMES = DRY  # index 0 soft, 1 medium, 2 hard
@@ -136,6 +137,7 @@ class CarAnalysis:
     n_sims: int = 0
     n_plans: int = 0
     wet: object | None = None  # WetResult when the wet simulator planned this car (plan_a / ranked are then empty)
+    sets_note: str | None = None  # set when the car's tyre sets blocked some candidate plans
     wet_in: object | None = None  # the WetIn it was given
     wet_obs: dict | None = None  # what the wet model read off the field (see wetobs.observe)
     rain_b: object | None = None  # dry-mode car, rain likely: the wet simulator's Plan B (WetResult)
@@ -232,6 +234,7 @@ def build_field(state, view, memory, ctx, pri: Priors, A: int) -> tuple[FieldIn,
                 cliff_risk=z(), team_off=z(), penalty=z())
     off_s, off_h = _num(tyre_r.get("off_soft_s"), -0.6), _num(tyre_r.get("off_hard_s"), 0.5)
     offs = [off_s, 0.0, off_h]
+    set_model = weekend.load_used_offset(int(_num(ctx.meta.get("year"), 0) or 0))  # used-set pace term learned from the season before
     info: dict = {"stops_done": {}, "stint_left": {}, "rules": {}, "idx": {n: i for i, n in enumerate(names)}}
     for i, (d, t, p, x) in enumerate(rows):
         n = d.number
@@ -248,6 +251,8 @@ def build_field(state, view, memory, ctx, pri: Priors, A: int) -> tuple[FieldIn,
         F.stint_age[i] = max(0, A - d.stint_start_lap)
         F.comp0[i] = c0
         F.fresh_ref[i] = d.laps + 3
+        sets = _car_sets(view.car("tyresets", n))
+        info.setdefault("sets", {})[n] = sets
         ratio = 1.0
         if field_deg[c0]:
             ratio = float(np.clip(deg / field_deg[c0], 0.6, 1.6))
@@ -255,6 +260,8 @@ def build_field(state, view, memory, ctx, pri: Priors, A: int) -> tuple[FieldIn,
             fj = _num(t.get(f"fresh_{DRY[j].lower()}_s"))
             if fj is None:  # no tyre fit yet: this set's pace shifted by the compound offsets
                 fj = pace - deg * max(F.age0[i] - 1, 0) - 2 * fuel + (offs[j] - offs[c0])
+            if sets is not None and sets["new"][j] <= 0 and sets["used"][j] > 0:  # only a used set of this compound is left
+                fj += weekend.used_offset(set_model, sets["used_laps"][j])
             F.fresh[i, j] = fj
             fd = field_deg[j]
             F.degc[i, j] = deg if j == c0 else min(0.3, max(0.0, (fd if fd is not None else deg * (0.7, 1.0, 1.3)[j]) * ratio))
@@ -307,6 +314,30 @@ def build_field(state, view, memory, ctx, pri: Priors, A: int) -> tuple[FieldIn,
 
 
 # --------------------------------------------------------------------------- candidate plans
+def _car_sets(v: dict | None) -> dict | None:
+    """The car's fittable sets per compound (SOFT, MEDIUM, HARD) from the tyresets values; None when nothing is known."""
+    if not v or v.get("sets_basis") in (None, "allocation"):
+        return None
+    avail = [v.get(f"avail_{c.lower()}") for c in DRY]
+    new = [v.get(f"new_{c.lower()}_left") for c in DRY]
+    if None in avail or None in new:
+        return None
+    laps = [v.get(f"used_{c.lower()}_laps") for c in DRY]
+    return {"avail": [int(a) for a in avail], "new": [int(x) for x in new],
+            "used": [int(a) - int(x) for a, x in zip(avail, new)], "used_laps": laps}
+
+
+def _sets_note(sets: dict, dropped: list[int], n: int) -> str:
+    gone = [DRY[j] for j in range(3) if sets["avail"][j] <= 0]
+    short = [f"{DRY[j]} x{sets['avail'][j]}" for j in range(3) if sets["avail"][j] == 1 and j not in [DRY.index(g) for g in gone]]
+    parts = []
+    if gone:
+        parts.append("no " + "/".join(gone) + " set left")
+    if short:
+        parts.append("only " + ", ".join(short))
+    return f"{' and '.join(parts) or 'tyre sets'}: {n} candidate plans dropped"
+
+
 def candidates(F: FieldIn, c: int, info: dict, number: str) -> list[tuple]:
     """Plans as tuples of (in-lap, compound index), legal under the rules and plausible for tyre life."""
     A, total, life = F.A, F.total, F.life
@@ -373,6 +404,14 @@ def candidates(F: FieldIn, c: int, info: dict, number: str) -> list[tuple]:
                         p = ((j1, combo[0]), (j2, combo[1]), (j3, combo[2]))
                         if legal(p):
                             plans.append(p)
+    sets = info.get("sets", {}).get(number)
+    if sets is not None:  # only compounds the car still has a set of, as many times as it has sets
+        ok = [p for p in plans if all(sum(1 for _, cj in p if cj == j) <= sets["avail"][j] for j in range(3))]
+        if ok and len(ok) < len(plans):
+            info.setdefault("sets_note", {})[number] = _sets_note(sets, [], len(plans) - len(ok))
+            plans = ok
+        elif not ok and plans:
+            info.setdefault("sets_note", {})[number] = "tyre sets would block every plan: not applied"
     return plans
 
 
@@ -425,6 +464,7 @@ def analyse_focus(F: FieldIn, info: dict, run: FieldRun, D: Draws, number: str, 
     A = F.A
     out = CarAnalysis(number, True, anchor=A, total=F.total)
     plans = candidates(F, c, info, number)
+    out.sets_note = info.get("sets_note", {}).get(number)
     out.n_plans = len(plans)
     out.pp = tuple(float(x) for x in F.pp[c])
     out.ps = info.get("ps", {}).get(number)
@@ -500,6 +540,9 @@ def sc_scenario(F: FieldIn, info: dict, number: str, ctx, plan_a: PlanResult, S_
         comp[1 + j, :, 1] = np.where(rem - gap > F.life[1], 2, 1)
     pos, time, soft = evaluate_plans(F, DB, runB, c, stop, comp, S_B)
     mean = (soft + SETTINGS["w_time"] * (time - time.mean())).mean(1)
+    sets = info.get("sets", {}).get(number)
+    if sets is not None and any(a > 0 for a in sets["avail"]):  # the SC stop only fits a compound the car has a set of
+        mean = mean + np.array([0.0] + [0.0 if sets["avail"][j] > 0 else 1e6 for j in range(3)])
     posm = pos.mean(1)
     best = 1 + int(np.argmin(mean[1:]))
     gain = float(posm[0] - posm[best])

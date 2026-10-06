@@ -247,3 +247,71 @@ def test_runtime_uses_the_qualifying_engineer():
     assert rt.latest["race"]["quali__part"] == 2
     assert any(k.startswith("quali__") for k in rt.latest["cars"]["1"])
     assert not any(k.startswith("head__") for k in rt.latest["race"])
+
+
+# ------------------------------------------------------------------ plans respect the sets
+def _field(total=57, A=20):
+    import numpy as np
+    from types import SimpleNamespace
+
+    return SimpleNamespace(A=A, total=total, R=total - A, life=np.array([18.0, 28.0, 38.0]), used=np.zeros((1, 3), dtype=bool),
+                           must=np.array([False]), reg_min_stops=0, max_stint=0.0)
+
+
+def _info(sets):
+    return {"stops_done": {"1": 0}, "stint_left": {"1": None}, "sets": {"1": sets}}
+
+
+def test_candidates_only_use_compounds_the_car_has():
+    from pitsense.pitwall.engineers.strategy import analysis as AN
+
+    F = _field()
+    free = AN.candidates(F, 0, _info(None), "1")
+    sets = {"avail": [2, 1, 0], "new": [2, 1, 0], "used": [0, 0, 0], "used_laps": [None] * 3}
+    info = _info(sets)
+    got = AN.candidates(F, 0, info, "1")
+    assert 0 < len(got) < len(free)
+    assert all(cj != 2 for p in got for _, cj in p)  # no hard set left
+    assert all(sum(1 for _, cj in p if cj == 1) <= 1 for p in got)  # one medium only
+    assert "HARD" in info["sets_note"]["1"]
+    assert "sets_note" not in _info(None)
+
+
+def test_candidates_unchanged_when_nothing_known_and_never_empty():
+    from pitsense.pitwall.engineers.strategy import analysis as AN
+
+    F = _field()
+    assert AN._car_sets({"sets_basis": "allocation", "avail_soft": 8}) is None
+    assert AN._car_sets({}) is None
+    none_left = {"avail": [0, 0, 0], "new": [0, 0, 0], "used": [0, 0, 0], "used_laps": [None] * 3}
+    info = _info(none_left)
+    F.must[0] = True  # a stop is compulsory, yet no set is left: the constraint cannot hold
+    assert AN.candidates(F, 0, info, "1") == AN.candidates(F, 0, _info(None), "1")  # a constraint that blocks everything is dropped
+    assert "not applied" in info["sets_note"]["1"]
+
+
+def test_tyresets_fall_back_to_allocation(race_log):
+    wall = PitWall(Context(meta=dict(race_log.meta)), engineers=[TyreSetsEngineer])
+    state = RaceState(race_log.meta)
+    for e in race_log.events:
+        state.apply(e)
+        wall.observe(state)
+    v = wall.car_values(state, "11")
+    assert v["tyresets__sets_basis"] == "allocation" and v["tyresets__new_soft_left"] is None
+    assert v["tyresets__avail_soft"] >= 0 and v["tyresets__avail_hard"] >= 0
+
+
+def test_used_offset_model():
+    m = {"used": -0.03, "per_lap": 0.02}
+    assert weekend.used_offset(None, 8) == 0.0 and weekend.used_offset(m, 0) == 0.0
+    assert weekend.used_offset(m, 5) == pytest.approx(0.07)
+    assert weekend.used_offset(m, 50) == pytest.approx(-0.03 + 0.02 * weekend.OFFSET_CAP)
+    assert weekend.used_offset({"used": -1.0, "per_lap": 0.0}, 3) == 0.0  # never faster than new
+
+
+def test_availability_counts_free_used_sets():
+    sets = [weekend.TyreSet("MEDIUM", 12, "Practice 2"), weekend.TyreSet("MEDIUM", 3, "Qualifying"), weekend.TyreSet("HARD", 9, "")]
+    sets[1].mounted = True
+    av = weekend.availability(sets, {"SOFT": 8, "MEDIUM": 3, "HARD": 2})
+    assert av["MEDIUM"] == {"new": 1, "used": 1, "used_laps": 12}
+    assert av["HARD"] == {"new": 2, "used": 1, "used_laps": 9} and av["SOFT"]["used_laps"] is None

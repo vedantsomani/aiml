@@ -229,7 +229,113 @@ def availability(sets: list[TyreSet], alloc: dict[str, int]) -> dict[str, dict]:
     left = remaining(sets, alloc)
     out = {}
     for c in DRY:
-        free = [t.laps for t in sets if t.compound == c and not t.mounted and not t.first or
-                t.compound == c and not t.mounted and t.first]
+        free = [t.laps for t in sets if t.compound == c and not t.mounted]
         out[c] = {"new": left[c], "used": len(free), "used_laps": min(free) if free else None}
     return out
+
+
+# --------------------------------------------------------------------------- used vs new pace
+OFFSET_CAP = 15  # laps on a set beyond which the offset stops growing
+PRIOR_SD = {"used": 0.10, "per_lap": 0.03}  # s: fitted terms shrink toward zero in proportion to their noise
+
+
+def used_offset(model: dict | None, laps: float | int | None) -> float:
+    """Seconds a used set with ``laps`` laps on it is slower than a new one (0 for a new set or no model)."""
+    if not model or not laps or laps <= 0:
+        return 0.0
+    return max(0.0, float(model["used"]) + float(model["per_lap"]) * min(float(laps), OFFSET_CAP))
+
+
+def _shrink(b: float, se: float, sd: float) -> float:
+    return b * sd * sd / (sd * sd + se * se)
+
+
+def fit_used_offset(year: int, boot: int = 30, seed: int = 0) -> dict:
+    """Learn the used-set pace term from the dry green-flag laps of the races of ``year``.
+
+    Lap time ~ driver-race + compound-race + race x lap (fuel) + compound x laps into the stint
+    + [used] + per_lap x min(laps on the set at fitting, OFFSET_CAP). The last two terms are shrunk by
+    their race-bootstrap noise. Returns {"used", "per_lap", "se_used", "se_per_lap", "n_laps", "races", "year"}.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from .archive import downloaded_sessions
+    from .events import load_archive_session
+    from .state import RaceState, relative_compound
+
+    rows = []
+    for ref in (r for r in downloaded_sessions() if r.year == year and r.session_name == "Race"):
+        log = load_archive_session(ref.local_dir)
+        st = RaceState(log.meta)
+        for e in log.events:
+            st.apply(e)
+        lines = (st.topics.get("TimingAppData") or {}).get("Lines") or {}
+        for rec in st.laps:
+            if rec.lap_time is None or rec.is_in_lap or rec.is_out_lap or rec.lap < 2 or rec.track_status != "1":
+                continue
+            real = _real_stints((lines.get(rec.driver) or {}).get("Stints") or [])
+            if not 1 <= rec.stint <= len(real):
+                continue
+            s = real[rec.stint - 1]
+            comp = relative_compound(str(s.get("Compound", "")).upper(), log.meta)
+            if comp in DRY:
+                rows.append((ref.slug, rec.driver, comp, rec.lap, rec.lap_time, _int(s.get("StartLaps")), rec.tyre_age or 0))
+    out = {"year": year, "used": 0.0, "per_lap": 0.0, "se_used": None, "se_per_lap": None, "n_laps": len(rows), "races": 0}
+    if len(rows) < 2000:
+        return out
+    df0 = pd.DataFrame(rows, columns=["race", "drv", "comp", "lap", "t", "start", "age"])
+    out["races"] = int(df0.race.nunique())
+
+    def fit(df):
+        med = df.groupby(["race", "drv"]).t.transform("median")
+        df = df[(df.t < med * 1.05) & (df.t > med * 0.93)]
+        sl = (df.age - df.start).clip(lower=0).to_numpy()
+        d = lambda k: pd.get_dummies(k, dtype=float).to_numpy()  # noqa: E731
+        X = [d(df.race + "|" + df.drv), d(df.race + "|" + df.comp)[:, 1:], d(df.race) * df.lap.to_numpy()[:, None]]
+        X += [((df.comp == c).to_numpy() * sl)[:, None] for c in DRY]
+        X += [(df.start > 0).to_numpy(float)[:, None], np.minimum(df.start, OFFSET_CAP).to_numpy(float)[:, None]]
+        return np.linalg.lstsq(np.hstack(X), df.t.to_numpy(), rcond=None)[0][-2:]
+
+    b = fit(df0)
+    rng = np.random.default_rng(seed)
+    races = df0.race.unique()
+    bs = []
+    for _ in range(boot):
+        parts = [df0[df0.race == r].assign(race=f"{r}#{j}") for j, r in enumerate(rng.choice(races, len(races)))]
+        bs.append(fit(pd.concat(parts)))
+    se = np.array(bs).std(0)
+    out.update(used=round(_shrink(float(b[0]), float(se[0]), PRIOR_SD["used"]), 4),
+               per_lap=round(_shrink(float(b[1]), float(se[1]), PRIOR_SD["per_lap"]), 4),
+               se_used=round(float(se[0]), 4), se_per_lap=round(float(se[1]), 4))
+    return out
+
+
+def _cache_path(year: int):
+    from .config import data_dir
+
+    return data_dir() / "scratch" / f"used_offset_{year}.json"
+
+
+def load_used_offset(race_year: int) -> dict | None:
+    """The used-set term learned from the season before ``race_year`` (None until the fit has been run for it)."""
+    import json
+
+    try:
+        return json.loads(_cache_path(race_year - 1).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+if __name__ == "__main__":  # python -m pitsense.weekend fit 2025
+    import json
+    import sys
+
+    if len(sys.argv) == 3 and sys.argv[1] == "fit":
+        res = fit_used_offset(int(sys.argv[2]))
+        p = _cache_path(res["year"])
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(res), encoding="utf-8")
+        tmp.replace(p)
+        print(res)
