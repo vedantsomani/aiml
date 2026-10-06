@@ -1183,16 +1183,16 @@ def load_call_log(path: Path) -> list[dict]:
 def shadow_score(calls: list[dict], final: RaceState, k: int = 2, cars: set[str] | None = None) -> dict:
     """Compare logged calls with the stops that really happened.
 
-    A BOX / PREPARE_BOX / BOX_IF_SC call from a car's lap L (``car_lap``) counts as right when that
+    A BOX / PREPARE_BOX call from a car's lap L (``car_lap``) counts as right when that
     car's real stop (its in-lap, red-flag stops excluded) is within L-k .. L+k. A STAY_OUT call is
     right when the car has no stop in L .. L+k. Recall: share of real stops that had a box call within
-    +-k laps. NO_CALL is not scored. Calls are scored as logged; later calls never rewrite earlier ones.
+    +-k laps. BOX_IF_SC is scored apart, only when its SC/VSC trigger happened (``box_if_sc``). NO_CALL is not scored. Calls are scored as logged; later calls never rewrite earlier ones.
     """
     stops: dict[str, list[int]] = {}
     for p in final.pit_events:
         if not p.under_red:
             stops.setdefault(p.driver, []).append(p.in_lap)
-    box = [c for c in calls if c.get("kind") == "call" and c.get("action") in ("BOX", "PREPARE_BOX", "BOX_IF_SC")]
+    box = [c for c in calls if c.get("kind") == "call" and c.get("action") in ("BOX", "PREPARE_BOX")]
     stay = [c for c in calls if c.get("kind") == "call" and c.get("action") == "STAY_OUT"]
     if cars:
         box, stay = [c for c in box if c["car"] in cars], [c for c in stay if c["car"] in cars]
@@ -1219,7 +1219,20 @@ def shadow_score(calls: list[dict], final: RaceState, k: int = 2, cars: set[str]
         "stay_out_calls": len(stay), "stay_out_accuracy": rate(stay_ok),
         "real_stops": len(real), "stop_recall": rate(covered),
         "note": "NO_CALL not scored" if not box and not stay else "",
+        "box_if_sc": _box_if_sc(calls, final, cars),
     }
+
+
+def _box_if_sc(calls, final, cars) -> dict:
+    """BOX_IF_SC is conditional: scored only when an SC/VSC came within its window (bench/callscore.py)."""
+    from ..bench import callscore
+
+    facts = callscore.race_facts(final)
+    rows = [callscore.score_call(c, facts) for c in calls if c.get("kind") == "call" and c.get("action") == "BOX_IF_SC"
+            and (not cars or c["car"] in cars)]
+    trig = [r for r in rows if r["triggered"]]
+    return {"calls": len(rows), "triggered": len(trig), "right": sum(bool(r["right"]) for r in trig),
+            "precision_when_triggered": round(sum(bool(r["right"]) for r in trig) / len(trig), 4) if trig else None}
 
 
 # ----------------------------------------------------------------------------- CLI

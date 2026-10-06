@@ -252,6 +252,10 @@ def cmd_bench_run(a) -> None:
         "decision_points": len(df),
         "feature_version": FEATURE_VERSION,
     }
+    from .bench.provenance import stamp
+
+    meta["provenance"] = stamp(f"expanding window: each {a.test_year} race scored by models trained on races that ended before it "
+                               f"(min {a.min_train} earlier races); strategy tasks: models bundle trained before the first {a.test_year} race")
     path = write_report(results, Path(a.out), meta)
     for r in results:
         print(f"\n== {r.task}")
