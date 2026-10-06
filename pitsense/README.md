@@ -191,12 +191,12 @@ Implement `fit(train_df, target)` and `predict(test_df)` (see `src/pitsense/benc
 
 ## Known limitations
 
-- **Live is untested.** The recorder and `pitsense pitwall --live` have not been run against a real session.
-- **Box-call timing is still the weakest part:** precision 0.42, recall 0.27. A firm BOX is right about half the time (75% on the Azerbaijan 2026 replay); PREPARE_BOX is right about 40% of the time. The pit probabilities can't yet tell a stop 1-2 laps away from one 4-8 laps away, and most stops under a safety car can't be foreseen a lap ahead.
-- **Wet races get no strategy call.** There is no intermediate or wet tyre model; only 3 wet races in 2026.
+- **Live: one real race so far.** The recorder ran through the 2026 Bahrain GP with an F1 TV login (74k messages, about 37 reconnects) and the race rebuilds fully from it. The pit wall made no calls that day because of a wet-start bug, since fixed. Replayed through the fixed code, Ferrari's calls were still weak (BOX 1 of 8 right). Call quality on races like that is being worked on.
+- **Box calls are the weakest part.** Precision is 0.54 and recall 0.28 on 2026 (top 5 cars), with large differences between races: about 0.63 on Azerbaijan, about 0.53 on Bahrain, and much lower for some teams. Most stops under a safety car can't be foreseen a lap ahead. Calls are scored on whether they match what teams did, not on whether they would have gained time.
+- **Wet strategy is weak.** The wet engine makes tyre-class calls (BOX for INTERS / SLICKS), but only about 1 in 5 is right (precision 0.18, recall 0.32 on 2025-26 wet races, against 0.07 / 0.09 for the rain-flag rule). It also ignores rivals and traffic.
 - **Public timing only:** no fuel loads, tyre temperatures or car telemetry. PitSense is strongest on rivals, whom teams also see only through timing.
 - **Voice.** The fine-tuned SmolLM2-360M writes the radio calls: 0% fact errors on held-out 2026 data, with a guard fallback 0.3% of the time. Piper (British voice) speaks them offline. Each message takes about 1 s on the GPU.
-- **Safety cars are simplified:** at most one SC and one VSC per simulated future; lapped cars and blue flags are not modelled.
+- **The simulator is simplified:** at most one SC and one VSC per simulated future, no red-flag restarts, no lapped traffic or blue flags, a fixed 6 s added to every stop for warm-up and traffic, and rivals that don't react to our stops.
 
 ## Roadmap
 
