@@ -8,7 +8,7 @@ import numpy as np
 
 from .sim import (
     FOLLOW_S, K_STOPS, NOSTOP, OFF, PARAMS, PLACEHOLDER, RETIRED, SC_CAP_S, SC_LAP_FACTOR, VSC_LAP_FACTOR,
-    Draws, FieldIn, cliff_ages, lap_times_for, pass_prob, sample_schedules,
+    Draws, FieldIn, cliff_ages, lap_times_for, pass_prob, red_tyres, sample_schedules,
 )
 
 
@@ -17,7 +17,15 @@ SOFT_TAU_S = 4.0  # s: width of the smoothed position
 
 def _loss_by_status(F: FieldIn, status_lap: np.ndarray) -> np.ndarray:
     L = F.loss
-    return np.where(status_lap == 2, L["sc"], np.where(status_lap == 1, L["vsc"], L["green"]))
+    return np.where(status_lap >= 2, L["sc"], np.where(status_lap == 1, L["vsc"], L["green"]))
+
+
+def _stop_amount(F: FieldIn, st: np.ndarray, z: np.ndarray, off) -> np.ndarray:
+    """Time a stop adds at its in-lap by track status (a red flag's tyre change is free)."""
+    P = PARAMS
+    extra = np.where(st == 0, P["stop_extra_s"], P["stop_extra_neutral_s"])
+    amt = np.maximum(_loss_by_status(F, st) + F.loss["sd"] * np.where(st == 0, 1.0, 0.6) * z + off + extra, 3.0)
+    return np.where(st == 3, 0.0, amt)
 
 
 @dataclass
@@ -29,6 +37,7 @@ class FieldRun:
     stop: np.ndarray  # [S,C,K] stop schedules used
     comp: np.ndarray
     pos: np.ndarray  # [S,C] finishing position if the car finishes (others' retirements counted)
+    raw: dict | None = None  # lap index -> [S,C] arrival times before safety-car bunching (laps with any SC)
 
 
 def _pit_losses(F: FieldIn, D: Draws, stop: np.ndarray, c: int | None = None) -> np.ndarray:
@@ -45,7 +54,7 @@ def _pit_losses(F: FieldIn, D: Draws, stop: np.ndarray, c: int | None = None) ->
             ok = (li >= 0) & (li < R)
             lis = np.clip(li, 0, R - 1)
             st = np.take_along_axis(D.status, lis, 1)
-            amt = np.maximum(_loss_by_status(F, st) + F.loss["sd"] * np.where(st == 0, 1.0, 0.6) * D.z_pit[:, :, k] + off + PARAMS["stop_extra_s"], 3.0)
+            amt = _stop_amount(F, st, D.z_pit[:, :, k], off)
             np.add.at(loss, (sidx[ok], cidx[ok], lis[ok]), amt[ok])
         return loss
     P = stop.shape[0]
@@ -57,7 +66,7 @@ def _pit_losses(F: FieldIn, D: Draws, stop: np.ndarray, c: int | None = None) ->
         ok = (li >= 0) & (li < R)
         lis = np.clip(li, 0, R - 1)
         st = D.status[sidx, lis]
-        amt = np.maximum(_loss_by_status(F, st) + F.loss["sd"] * np.where(st == 0, 1.0, 0.6) * D.z_pit[None, :, c, k] + F.team_off[c] + PARAMS["stop_extra_s"], 3.0)
+        amt = _stop_amount(F, st, D.z_pit[None, :, c, k], F.team_off[c])
         np.add.at(loss, (pidx[ok], sidx[ok], lis[ok]), amt[ok])
     return loss
 
@@ -71,13 +80,15 @@ def simulate_field(F: FieldIn, D: Draws, stop: np.ndarray | None = None, comp: n
         cur, new = cliff_ages(F, D, c)
         lt[:, c, :] = lap_times_for(F, D, c, stop[None, :, c, :], comp[None, :, c, :], cur, new)[0]
     loss = _pit_losses(F, D, stop)
-    sc_t = F.ref_pace * np.array([1.0, VSC_LAP_FACTOR, SC_LAP_FACTOR])
+    sc_t = F.ref_pace * np.array([1.0, VSC_LAP_FACTOR, SC_LAP_FACTOR, SC_LAP_FACTOR])
+    air = F.air * PARAMS["air_scale"]
     cum = np.empty((S, C, R + 1))
     cum[:, :, 0] = F.x0[None, :]
     cur = np.broadcast_to(F.x0[None, :], (S, C)).copy()
+    raw: dict = {}
     for l in range(R):
         st = D.status[:, l]
-        green, sc = st == 0, st == 2
+        green, sc = st == 0, st >= 2
         free = np.where(st[:, None] > 0, sc_t[st][:, None], lt[:, :, l])
         order = np.argsort(cur, axis=1, kind="stable")
         cp = np.take_along_axis(cur, order, 1)
@@ -96,15 +107,31 @@ def simulate_field(F: FieldIn, D: Draws, stop: np.ndarray | None = None, comp: n
             keep = up[:, r] < pass_prob(delta, F.pass_p)
             held = np.maximum(b, a_out + FOLLOW_S)
             close = (cp[:, r] - cp[:, r - 1]) < 1.0
+            passed = (b < a_out) & keep
             g = np.where(b < a_out, np.where(keep, b, held), np.where(close, held, b))
+            if air:  # dirty air: a car that starts the lap within 1 s and stays behind loses a little more
+                g = np.where(close & ~passed, np.maximum(g, b + air), g)
             nb = np.minimum(arrive[:, r], nl[:, r - 1] + SC_CAP_S)
             nl[:, r] = np.where(sc, nb, arrive[:, r])
             out[:, r] = np.where(green, g, nl[:, r] + ls[:, r])
         newc = np.empty_like(out)
         np.put_along_axis(newc, order, out, 1)
+        if sc.any():
+            # behind the safety car the stop costs its loss against the gaps as they were, then the field bunches
+            # (order kept, gaps capped): a stop on the first SC lap is the cheap one
+            t_raw = cur + free + loss[:, :, l]
+            o2 = np.argsort(t_raw, axis=1, kind="stable")
+            ts = np.take_along_axis(t_raw, o2, 1)
+            bs = ts[:, :1] + np.concatenate([np.zeros((S, 1)), np.cumsum(np.minimum(np.diff(ts, axis=1), SC_CAP_S), 1)], 1)
+            bun = np.empty_like(bs)
+            np.put_along_axis(bun, o2, bs, 1)
+            newc = np.where(sc[:, None], bun, newc)
+            raw[l] = np.where(sc[:, None], t_raw, newc)
         cum[:, :, l + 1] = newc
         cur = newc
-    return _finish(F, D, cum, stop, comp)
+    run = _finish(F, D, cum, stop, comp)
+    run.raw = raw
+    return run
 
 
 def _finish(F: FieldIn, D: Draws, cum: np.ndarray, stop, comp) -> FieldRun:
@@ -119,17 +146,20 @@ def _finish(F: FieldIn, D: Draws, cum: np.ndarray, stop, comp) -> FieldRun:
 
 
 # --------------------------------------------------------------------------- the focus car's plans
-def evaluate_plans(F: FieldIn, D: Draws, run: FieldRun, c: int, stop_lap: np.ndarray, comp: np.ndarray, S_use: int | None = None):
+def evaluate_plans(F: FieldIn, D: Draws, run: FieldRun, c: int, stop_lap: np.ndarray, comp: np.ndarray, S_use: int | None = None,
+                   at_lap: int | None = None):
     """(finishing position, finishing time) [P,S] of car ``c`` under each plan, against the simulated opponents.
 
     stop_lap [P,S,K] absolute in-laps (NOSTOP if none), comp [P,S,K] compound fitted at each stop. Uses the
-    first ``S_use`` simulations. Each lap needs only the nearest opponents ahead and behind, found by a sorted search.
+    first ``S_use`` simulations. With ``at_lap`` (a simulated lap index) a 4th value is returned: the car's position
+    [P,S] at the end of that lap. Each lap needs only the nearest opponents ahead and behind, found by a sorted search.
     """
     S = S_use or D.S
     Pn = stop_lap.shape[0]
     C, R, A = F.C, F.R, F.A
     stop_lap, comp = stop_lap[:, :S], comp[:, :S]
     Dv = _Slice(D, S)
+    stop_lap, comp = red_tyres(F, Dv.red_lap[None, :], stop_lap, comp)
     cur_cliff, new_cliff = cliff_ages(F, Dv, c)
     tfree = lap_times_for(F, Dv, c, stop_lap, comp, cur_cliff, new_cliff)  # [P,S,R]
     ploss = _pit_losses(F, Dv, stop_lap, c)  # [P,S,R]
@@ -148,7 +178,16 @@ def evaluate_plans(F: FieldIn, D: Draws, run: FieldRun, c: int, stop_lap: np.nda
         sp_all.append(sp)
         nw_all.append(np.take_along_axis(cum[:, :, l + 1], o, 1))
         flat_all.append((sp + srow.T).ravel())
-    sc_t = F.ref_pace * np.array([1.0, VSC_LAP_FACTOR, SC_LAP_FACTOR])
+    raw_sc = {}  # safety-car laps: opponents sorted by arrival before bunching, and their bunched times
+    for l, rw in (run.raw or {}).items():
+        rw = rw[:S].copy()
+        rw[:, c] = PLACEHOLDER
+        rw = np.where(gone[:, :, l + 1], RETIRED, rw)
+        o = np.argsort(rw, axis=1, kind="stable")
+        rs = np.take_along_axis(rw, o, 1)
+        raw_sc[l] = (rs, np.take_along_axis(cum[:, :, l + 1], o, 1), (rs + srow.T).ravel())
+    sc_t = F.ref_pace * np.array([1.0, VSC_LAP_FACTOR, SC_LAP_FACTOR, SC_LAP_FACTOR])
+    air = F.air * PARAMS["air_scale"]
     ours = np.full((Pn, S), F.x0[c])
     hold = PARAMS["hold_gain"]
     for l in range(R):
@@ -165,20 +204,31 @@ def evaluate_plans(F: FieldIn, D: Draws, run: FieldRun, c: int, stop_lap: np.nda
         free = np.where(st[None, :] > 0, sc_t[st][None, :], tfree[:, :, l])
         arrive = ours + free
         total = arrive + lo
-        green, sc = (st == 0)[None, :], (st == 2)[None, :]
+        green, sc = (st == 0)[None, :], (st >= 2)[None, :]
         delta = (a_new - a_prev) - (free + lo)
         keep = D.u_pass[:S, c, l][None, :] < pass_prob(delta, F.pass_p)
         held = np.maximum(total, a_new + FOLLOW_S)
         close = hasA & ((ours - a_prev) < 1.0)
+        passed = hasA & (total < a_new) & keep
         g = np.where(hasA & (total < a_new), np.where(keep, total, held), np.where(close, held, total))
+        if air:
+            g = np.where(close & ~passed, np.maximum(g, total + air), g)
         # a faster car right behind may be held off at the cost of nothing here (bounded gain)
         delta_b = (free + lo) - (b_new - b_prev)  # negative when the car behind is faster
         pb = pass_prob(-delta_b, F.pass_p)
         near = hasB & ((b_prev - ours) < 1.5) & (b_new < g)
         defend = near & (D.u_def[:S, l][None, :] >= pb)
         g = np.where(defend, np.maximum(np.minimum(g, b_new - 0.2), g - hold), g)
-        scg = np.where(hasA, np.minimum(arrive, a_new + SC_CAP_S), arrive) + lo
+        if l in raw_sc:  # the stop's loss against the gaps before bunching, then behind the car ahead
+            rs, ns, flat = raw_sc[l]
+            k2 = np.searchsorted(flat, (total + srow).ravel()).reshape(Pn, S) - base_k
+            i2 = np.clip(k2 - 1, 0, C - 1)
+            scg = np.where(k2 > 0, ns[si, i2] + np.minimum(total - rs[si, i2], SC_CAP_S), total)
+        else:
+            scg = np.where(hasA, np.minimum(arrive, a_new + SC_CAP_S), arrive) + lo
         ours = np.where(green, g, np.where(sc, scg, total))
+        if at_lap is not None and l == at_lap:
+            pos_at = 1 + (cum[None, :, :, l + 1] < ours[:, :, None]).sum(2)
     ours = ours + F.penalty[c]
     fin = run.final[:S].copy()
     fin[:, c] = PLACEHOLDER
@@ -187,6 +237,8 @@ def evaluate_plans(F: FieldIn, D: Draws, run: FieldRun, c: int, stop_lap: np.nda
     # a smoothed position (each rival counts by how close the margin is): less noisy for comparing plans
     x = np.clip((ours[:, :, None] - fin[None, :, :]) / SOFT_TAU_S, -30.0, 30.0)
     soft = 1.0 + (1.0 / (1.0 + np.exp(-x))).sum(2) - 1.0 / (1.0 + np.exp(-np.clip((ours - PLACEHOLDER) / SOFT_TAU_S, -30, 30)))
+    if at_lap is not None:
+        return pos.astype(float), ours, soft, pos_at.astype(float)
     return pos.astype(float), ours, soft
 
 
@@ -198,3 +250,4 @@ class _Slice:
         self.level, self.degmul, self.noise = D.level[:S], D.degmul[:S], D.noise[:S]
         self.status, self.z_pit = D.status[:S], D.z_pit[:S]
         self.z_cliff, self.u_cliff = D.z_cliff[:S], D.u_cliff[:S]
+        self.red_lap = D.red_lap[:S]

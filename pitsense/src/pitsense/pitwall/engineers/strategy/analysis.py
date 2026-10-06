@@ -290,10 +290,9 @@ def build_field(state, view, memory, ctx, pri: Priors, A: int) -> tuple[FieldIn,
         "vsc": _num(pit_r.get("loss_vsc"), pr_.vsc), "sd": max(0.8, _num(pit_r.get("loss_now_sd"), 1.2)),
     }
     F.life = np.array([pri.life[c] for c in DRY])
-    F.sc_rate, F.vsc_rate, F.sc_len, F.vsc_len = pri.sc_rate, pri.vsc_rate, pri.sc_len, pri.vsc_len
+    pri.fill(F)  # SC / VSC / red-flag hazards and lengths, pass chances, dirty air (priors.Priors.fill)
     F.sc_near, F.vsc_near = near_rates(view)
     F.sc_now, F.sc_now_left = PHASES.get(str(rule_r.get("sc_phase") or "none"), (0, 0))
-    F.pass_p = tuple(pri.pass_p)
     F.ref_pace = ref_pace
     F.max_stint = _num(rule_r.get("reg_max_stint_laps"), 0.0) or 0.0
     F.reg_min_stops = int(_num(rule_r.get("reg_min_stops"), 0) or 0)

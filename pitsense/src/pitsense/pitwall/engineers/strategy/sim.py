@@ -23,6 +23,7 @@ from .priors import PASS_BINS
 
 NOSTOP = 10**6  # "no stop" lap
 K_STOPS = 3
+N_EV = 4  # neutralisations tracked per future (for stop pulls and the red flag); more may run
 SC_LAP_FACTOR = 1.45  # lap time under the safety car vs a normal lap
 VSC_LAP_FACTOR = 1.30
 SC_CAP_S = 1.0  # gap between cars after the field bunches behind the safety car
@@ -42,10 +43,13 @@ PARAMS = {
     "cliff_slope": 0.25,  # s per lap beyond the cliff
     "cliff_cap": 6.0,
     "retire_rate": 0.0003,  # per car-lap
-    "sc_pull": 0.65,  # share of cars due to stop soon that come in under a safety car
-    "vsc_pull": 0.30,
-    "sc_pull_window": 14,
-    "stop_extra_s": 6.0,  # s added to every stop: traffic on rejoining, cold-tyre laps
+    "sc_pull": 0.85,  # share of cars due to stop soon that come in under a safety car
+    "vsc_pull": 0.45,
+    "sc_pull_window": 20,
+    "stop_extra_s": 3.0,  # s added to every green-flag stop: cold-tyre laps (rejoin traffic is simulated)
+    "stop_extra_neutral_s": 0.0,  # the same under a safety car / VSC (the field runs slowly on cold tyres too)
+    "air_scale": 0.5,  # share of the learnt within-1-s lap-time loss charged as dirty air (the rest is the queue)
+    "restart_gap": 2,  # green laps at least between two neutralisations
     "stint_scale": 1.12,  # stints drawn from past races are stretched by this factor (opponents' later stops)
     "hold_gain": 1.0,  # most a defending car can gain (s) per lap by holding a rival off
 }
@@ -82,6 +86,10 @@ class FieldIn:
     vsc_near: float | None = None
     sc_len: float = 4.0
     vsc_len: float = 2.0
+    haz: np.ndarray | None = None  # [3,R] per-lap start probability of red flag / SC / VSC (None: sc_rate, vsc_rate)
+    sc_lens: tuple = ()  # past SC lengths in laps (sorted); empty: geometric around sc_len
+    vsc_lens: tuple = ()
+    air: float = 0.0  # s/lap lost within 1 s of the car ahead (learnt; scaled by PARAMS["air_scale"])
     sc_now: int = 0  # 0 green, 1 VSC, 2 SC in force at the anchor
     sc_now_left: int = 0  # laps of it still to run (including the one in progress)
     stints: list = field(default_factory=list)  # per compound: (sorted done lengths, sorted open lengths)
@@ -131,40 +139,121 @@ class Draws:
         self.u_sc = rng.random((S, 4))  # start, kind, length draws for the safety-car scenario
         self.u_sc_lap = rng.random((S, 2, Rt))[:, :, A:Rt]  # per-lap start draws: VSC, SC
         self.u_len = rng.random((S, 2))
+        self.u_ev = rng.random((S, Rt))[:, A:Rt]  # neutralisation start draw per lap
+        self.u_dur = rng.random((S, Rt))[:, A:Rt]  # its length
+        self.u_pull2 = cut(rng.random((S, n, N_EV)))
         self.status, self.sc_start = self._status(F, rng, force_sc)
 
     def _status(self, F: FieldIn, rng, force_sc):
-        """Track status per simulated lap: 0 green, 1 VSC, 2 SC. Also the first SC/VSC lap index (R if none)."""
-        S, R = self.S, max(F.R, 1)
-        idx = np.arange(R)[None, :]
-        u = np.clip(self.u_len, 1e-9, 1 - 1e-9)
-        poisson = lambda m, q: np.floor(-np.log(1 - q) * max(m - 1, 0.3)).astype(int)  # noqa: E731 (geometric-like length)
+        """Track status per simulated lap: 0 green, 1 VSC, 2 SC, 3 red flag (its lap: field bunched, free tyre
+        change; then a lap behind the safety car). Any number of neutralisations per future: a per-lap start
+        hazard (circuit and lap phase, ``F.haz``), lengths drawn from past ones, at least ``restart_gap`` green laps
+        between two. Returns the status and the first neutralisation's start lap index (R if none); also sets
+        ``ev_start`` / ``ev_kind`` [S,N_EV] (all starts, R if none) and ``red_lap`` [S] (absolute lap of the first
+        red flag, NOSTOP if none)."""
+        S, R, A = self.S, max(F.R, 1), F.A
+        haz = np.zeros((3, R))
+        if F.haz is not None and F.haz.shape[1] >= F.R:
+            haz[:, :F.R] = F.haz[:, :F.R]
+        else:
+            haz[1], haz[2] = F.sc_rate, F.vsc_rate
+        if F.sc_near is not None:
+            haz[1, :2] = F.sc_near
+        if F.vsc_near is not None:
+            haz[2, :2] = F.vsc_near
+        cum = np.cumsum(haz, 0)  # one draw per lap: < red, < red + sc, < red + sc + vsc
+        lens = {2: (F.sc_lens, F.sc_len), 1: (F.vsc_lens, F.vsc_len)}
+
+        def dur(kind: np.ndarray, u: np.ndarray) -> np.ndarray:
+            out = np.ones(kind.shape, dtype=np.int64)
+            for k, (tab, mean) in lens.items():
+                sel = kind == k
+                if not sel.any():
+                    continue
+                if len(tab) >= 5:
+                    t = np.asarray(tab, dtype=np.int64)
+                    out[sel] = t[np.minimum((u[sel] * len(t)).astype(int), len(t) - 1)]
+                else:
+                    uu = np.clip(u[sel], 1e-9, 1 - 1e-9)
+                    out[sel] = 1 + np.floor(-np.log(1 - uu) * max(mean - 1, 0.3)).astype(np.int64)
+            out[kind == 3] = 2
+            return out
+
+        status = np.zeros((S, R), dtype=np.int8)
+        left = np.zeros(S, dtype=np.int64)  # laps of the running neutralisation still to go
+        kind_now = np.zeros(S, dtype=np.int64)
+        cool = np.zeros(S, dtype=np.int64)
+        gap = int(PARAMS["restart_gap"])
+        ev_start = np.full((S, N_EV), R, dtype=np.int64)
+        ev_kind = np.zeros((S, N_EV), dtype=np.int64)
+        n_ev = np.zeros(S, dtype=np.int64)
+        forced_at = np.full(S, -1, dtype=np.int64)
+        forced_kind = np.zeros(S, dtype=np.int64)
         if force_sc is not None:  # scenario: a safety car / VSC starting within the next few laps
             lo, hi, p_sc = force_sc
-            start = lo + np.minimum((self.u_sc[:, 0] * (hi - lo + 1)).astype(int), hi - lo)
-            is_sc = self.u_sc[:, 1] < p_sc
-            dur = np.where(is_sc, 1 + poisson(F.sc_len, u[:, 1]), 1 + poisson(F.vsc_len, u[:, 0]))
-            on = (idx >= start[:, None]) & (idx < (start + dur)[:, None])
-            status = np.where(on, np.where(is_sc, 2, 1)[:, None], 0).astype(np.int8)
-            return status, np.minimum(start, R)
-        status = np.zeros((S, R), dtype=np.int8)
-        first = np.full(S, R, dtype=np.int64)
-        for k, kind, rate, mean_len in ((0, 1, F.vsc_rate, F.vsc_len), (1, 2, F.sc_rate, F.sc_len)):
-            near = F.vsc_near if k == 0 else F.sc_near
-            rv = np.full(R, rate)
-            if near is not None:
-                rv[:2] = near
-            hit = self.u_sc_lap[:, k, :R] < rv[None, :]
-            start = np.where(hit.any(1), hit.argmax(1), R)
-            dur = 1 + poisson(mean_len, u[:, k])
-            on = (idx >= start[:, None]) & (idx < (start + dur)[:, None])
-            status = np.where(on, kind, status).astype(np.int8)
-            first = np.minimum(first, start)
-        if F.sc_now:  # a safety car / VSC is out now: it covers the laps still to run
-            left = 1 + poisson(F.sc_now_left + 1, u[:, 0])
-            status = np.where(idx < left[:, None], F.sc_now, status).astype(np.int8)
-            first = np.zeros(S, dtype=np.int64)
-        return status, first
+            forced_at = lo + np.minimum((self.u_sc[:, 0] * (hi - lo + 1)).astype(int), hi - lo)
+            forced_kind = np.where(self.u_sc[:, 1] < p_sc, 2, 1)
+        elif F.sc_now:  # a safety car / VSC is out now: it covers the laps still to run
+            u = np.clip(self.u_len[:, 0], 1e-9, 1 - 1e-9)
+            left = 1 + np.floor(-np.log(1 - u) * max(F.sc_now_left, 0.3)).astype(np.int64)
+            kind_now[:] = min(int(F.sc_now), 2)
+            ev_start[:, 0], ev_kind[:, 0], n_ev[:] = 0, kind_now, 1
+        rows = np.arange(S)
+        nu = self.u_ev.shape[1]
+        for l in range(R):
+            u = self.u_ev[:, l] if l < nu else np.ones(S)
+            k_new = np.where(u < cum[0, l], 3, np.where(u < cum[1, l], 2, np.where(u < cum[2, l], 1, 0)))
+            free = (left <= 0) & (cool <= 0)
+            if force_sc is not None:
+                k_new = np.where(l < forced_at, 0, np.where(l == forced_at, forced_kind, k_new))
+                free = free | ((left <= 0) & (l == forced_at))
+            start = free & (k_new > 0)
+            if start.any():
+                kn = np.where(start, k_new, 0)
+                d = dur(kn, self.u_dur[:, l] if l < nu else np.full(S, 0.5))
+                left = np.where(start, d, left)
+                kind_now = np.where(start, kn, kind_now)
+                keep = start & (n_ev < N_EV)
+                ev_start[rows[keep], n_ev[keep]] = l
+                ev_kind[rows[keep], n_ev[keep]] = kn[keep]
+                n_ev = n_ev + start
+            on = left > 0
+            # a red flag's first lap is the stoppage; the second runs behind the safety car
+            status[:, l] = np.where(on, np.where((kind_now == 3) & (left == 1), 2, kind_now), 0)
+            ending = on & (left == 1)
+            left = np.maximum(left - 1, 0)
+            cool = np.where(ending, gap, np.maximum(cool - 1, 0))
+        self.ev_start, self.ev_kind = ev_start, ev_kind
+        red_i = np.where(ev_kind == 3, ev_start, R).min(1)
+        self.red_lap = np.where(red_i < F.R, A + 1 + red_i, NOSTOP).astype(np.int64)
+        return status, np.minimum(ev_start[:, 0], R)
+
+
+def red_tyres(F: FieldIn, red_lap: np.ndarray, stop: np.ndarray, comp: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """A red flag gives every car a free tyre change: the first stop planned after the red-flag lap moves to it; a
+    car with no stop left takes a set that reaches the flag (if more than 8 laps remain and a stop slot is free).
+    ``red_lap`` (absolute lap, NOSTOP if none) broadcasts against ``stop[..., 0]``."""
+    if not (red_lap < NOSTOP).any():
+        return stop, comp
+    stop, comp = stop.copy(), comp.copy()
+    r = np.broadcast_to(red_lap, stop.shape[:-1])
+    has_red = r < NOSTOP
+    after = (stop > r[..., None]) & (stop < NOSTOP)
+    any_after = after.any(-1)
+    j = after.argmax(-1)[..., None]
+    mv = has_red & any_after
+    np.put_along_axis(stop, j, np.where(mv, r, np.take_along_axis(stop, j, -1)[..., 0])[..., None], -1)
+    n_used = (stop < NOSTOP).sum(-1)
+    at_red = (stop == r[..., None]).any(-1)
+    rem = F.total - r
+    add = has_red & ~any_after & ~at_red & (n_used < stop.shape[-1]) & (rem > 8)
+    if add.any():
+        life = F.life
+        cj = np.where(rem <= 0.9 * life[0], 0, np.where(rem <= 1.1 * life[1], 1, 2))
+        slot = np.minimum(n_used, stop.shape[-1] - 1)[..., None]
+        np.put_along_axis(stop, slot, np.where(add, r, np.take_along_axis(stop, slot, -1)[..., 0])[..., None], -1)
+        np.put_along_axis(comp, slot, np.where(add, cj, np.take_along_axis(comp, slot, -1)[..., 0])[..., None], -1)
+    return stop, comp
 
 
 # --------------------------------------------------------------------------- helpers
@@ -277,19 +366,30 @@ def sample_schedules(F: FieldIn, D: Draws):
     length = _empirical(F, cur_c, ml, D.u_after[:, :, 0], D.u_open[:, :, 0])
     later = np.where(length >= NOSTOP, NOSTOP, A + (length * PARAMS["stint_scale"] - F.stint_age[None, :]).astype(np.int64))
     s0 = np.where(beyond, later, first_in)
-    # safety car / VSC: cars due to stop soon come in
-    l0 = D.sc_start  # [S] first SC/VSC lap index (R if none)
-    kind = np.take_along_axis(D.status, np.minimum(l0, max(R, 1) - 1)[:, None], 1)[:, 0]
+    # safety car / VSC: cars due to stop soon come in (each neutralisation in turn; red flags are free changes)
     in_prog = bool(F.sc_now)
-    pull_p = np.where(kind == 2, PARAMS["sc_pull"], PARAMS["vsc_pull"])[:, None]
-    lap0 = (A + 1 + l0)[:, None]  # absolute lap of the first SC lap
     win = PARAMS["sc_pull_window"]
-    due = (s0 >= lap0) & (s0 <= lap0 + win)
-    age_at = F.stint_age[None, :] + (lap0 - A)
-    ratio = age_at / np.maximum(F.life[F.comp0][None, :], 5.0)
-    extra = (s0 > lap0 + win) & (ratio > 0.55) & ((total - lap0) > 8)  # no stop due: old tyres, take the cheap one
-    pull = (D.u_pull < pull_p * np.where(due, 1.0, np.where(extra, 0.55 * np.minimum(ratio, 1.2), 0.0))) & (l0 < R)[:, None] & (not in_prog)
-    s0 = np.where(pull & (lap0 <= total - 3), lap0, s0)
+    ev_start = getattr(D, "ev_start", D.sc_start[:, None])
+    ev_kind = getattr(D, "ev_kind", None)
+    for e in range(ev_start.shape[1]):
+        l0 = ev_start[:, e]  # [S] start lap index of this neutralisation (R if none)
+        if not (l0 < R).any():
+            break
+        if ev_kind is None:
+            kind = np.take_along_axis(D.status, np.minimum(l0, max(R, 1) - 1)[:, None], 1)[:, 0]
+        else:
+            kind = ev_kind[:, e]
+        if e == 0 and in_prog:
+            continue
+        pull_p = np.where(kind == 2, PARAMS["sc_pull"], np.where(kind == 1, PARAMS["vsc_pull"], 0.0))[:, None]
+        lap0 = (A + 1 + l0)[:, None]  # absolute lap of its first lap
+        due = (s0 >= lap0) & (s0 <= lap0 + win)
+        age_at = F.stint_age[None, :] + (lap0 - A)
+        ratio = age_at / np.maximum(F.life[F.comp0][None, :], 5.0)
+        extra = (s0 > lap0 + win) & (ratio > 0.55) & ((total - lap0) > 8)  # no stop due: old tyres, take the cheap one
+        u_p = D.u_pull if e == 0 else D.u_pull2[:, :, e]
+        pull = (u_p < pull_p * np.where(due, 1.0, np.where(extra, 0.55 * np.minimum(ratio, 1.2), 0.0))) & (l0 < R)[:, None]
+        s0 = np.where(pull & (lap0 <= total - 3), lap0, s0)
     # must-stop cars always make one
     need = F.must[None, :] & (s0 >= total - 2)
     forced = A + 3 + (D.u_force * np.maximum(R - 6, 1)).astype(np.int64)
@@ -324,6 +424,9 @@ def sample_schedules(F: FieldIn, D: Draws):
             nxt = np.where(has & (length < NOSTOP), stop[:, :, j] + length, NOSTOP)
             stop[:, :, j + 1] = np.where(nxt <= total - 2, nxt, NOSTOP)
         prev = np.where(has, c_j, prev)
+    red = getattr(D, "red_lap", None)
+    if red is not None:
+        stop, comp = red_tyres(F, red[:, None], stop, comp)
     return stop, comp
 
 
