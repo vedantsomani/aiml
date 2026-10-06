@@ -4,7 +4,7 @@ A virtual F1 pit wall that runs on the public timing feed. It has one engineer p
 
 | Engineer | Job | Doc |
 |---|---|---|
-| Data | rebuilds the race from the raw feed; every Grand Prix 2018–2026 (188 races), validated against FastF1 | [data](docs/data.md) |
+| Data | rebuilds the race from the raw feed; every Grand Prix 2018–2026, validated against FastF1 | [data](docs/data.md) |
 | Tyres & pace | fuel-corrected pace, wear, tyre-cliff risk, pace on fresh tyres | [tyre](docs/engineers/tyre.md) |
 | Pit stops | what a stop costs now (green / SC / VSC), where the car rejoins | [pitstop](docs/engineers/pitstop.md) |
 | Rivals | who pits when, undercut threats and chances | [rivals](docs/engineers/rivals.md) |
@@ -31,7 +31,7 @@ The dashboard shows the timing tower, a live track map, your team's calls with P
 
 How a team uses it from day one: [docs/pitwall.md](docs/pitwall.md). How it is built, and the rules every engineer follows: [docs/ENGINEERING.md](docs/ENGINEERING.md).
 
-**Honest status.** Every number below is a backtest on the 2026 races, each scored with models trained only on races that finished before it. The live recorder has not yet been run against a real session, and box-call timing (precision 0.42) is still the weakest part. Run it in shadow mode (`pitsense shadow-score`) before trusting it.
+**Honest status.** Every number below is a backtest on the 2026 races, each scored with models trained only on races that finished before it. Box-call timing is still the weakest part (see [Results](#results)). Run it in shadow mode (`pitsense shadow-score`) before trusting it.
 
 ---
 
@@ -47,7 +47,7 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned   # once: lets PowerShell ru
 py -3.12 -m venv .venv
 .venv\Scripts\Activate.ps1                            # prompt now starts with (.venv)
 python -m pip install -e ".[dev]"
-python -m pytest -q                                   # 27 tests; the real-race test skips until data is downloaded
+python -m pytest -q                                   # the real-race tests skip until data is downloaded
 ```
 
 If you can't change the execution policy, skip activation and put `.venv\Scripts\` in front of commands. For example: `.venv\Scripts\python -m pip install -e ".[dev]"`, then `.venv\Scripts\pitsense bench run`. Without either, `pip` installs into your global Python instead of the project's environment.
@@ -129,20 +129,9 @@ bench/evaluate.py   expanding-window scoring → reports/leaderboard.md
 - **Tyre age is derived.** It's computed from the stint start, because the feed's own lap counter arrives about 2 s after the line and sometimes freezes mid-race.
 - **Red-flag pit-lane entries aren't stops.** Everyone goes in and tyres are changed for free, so they're excluded from the labels.
 
-## Race tests (full pit wall replay, models trained only on earlier races)
-
-`pitsense shadow-score` grades every logged call against what happened (a call is right within ±2 laps):
-
-| Race | Box calls right | BOX alone | Stay-out right | Stops caught |
-|---|---|---|---|---|
-| Azerbaijan 2026 (safety car laps 31-38) | 63% | 25 / 29 | 96% | 53% |
-| Bahrain 2026 (intermediate start, 73 stops) | 53% | 14 / 22 | 84% | 26% |
-
-The Bahrain test found a real bug, now fixed: a wet start had muted the dry strategy for the rest of the race.
-
 ## Validation against FastF1
 
-All 188 races 2018–2026 are validated per season in [docs/data.md](docs/data.md). The 2025–26 detail is below.
+All races 2018–2026 are validated per season in [docs/data.md](docs/data.md). The 2025–26 detail is below.
 
 ### 2025–26 (39 races, 43,856 laps)
 
@@ -161,27 +150,12 @@ The remaining differences come from timing, not parsing.
 
 Full per-race output: `reports/validation.txt`.
 
-## Benchmark results
+## Results
 
-**How it was scored:** the 15 races of 2026 are the test set. Each race is scored with models trained on every race from 2018 that finished before it started. Model settings were chosen on 2025 races only. 202,784 decision points from 188 races.
+Every number in this section is generated: `pitsense results --readme` writes `reports/results.md` / `results.json` (each table tagged with data version, config, training cutoff and git commit) and replaces the block below. Method: [docs/evaluation.md](docs/evaluation.md).
 
-| Task | Best model | Score (2026) | Baseline |
-|---|---|---|---|
-| Car pits next lap | `gbm_hazard` | log loss 0.114, AUC 0.824 | 0.138 (base rate) |
-| Car pits within 3 laps | `gbm_hazard` | log loss 0.259, AUC 0.785 | 0.310 (base rate) |
-| Rejoin position after a stop | `pitstop_gbm` | 62.7% exact, 90.4% within one place | 51.4% / 85.9% (`rejoin_gbm`), 32.7% (no change) |
-| Time a stop costs, s | `pitstop_loss` | MAE 3.38 | 4.08 (v0.1 prior) |
-| Next lap time, s | `next_lap_gbm` | MAE 0.67 | 1.50 (last clean lap) |
-| Lap time 5 laps ahead, s | `lap5_gbm` | MAE 0.86 | 1.80 (last clean lap) |
-| Tyre cliff within 3 laps | `cliff_gbm` | AUC 0.81 | base rate |
-| Undercut by the car behind within 5 laps | `undercut_gbm` | AUC 0.84 | 0.78 (gap rule) |
-| Rain within 10 minutes | nowcast | log loss 0.079 | 0.186 (base rate); only 3 wet races in 2026 |
-| Finishing position at 25/50/75% distance | race simulator | RPS 0.050 | 0.072 (current position) |
-| Box calls within ±2 laps (top 5) | head of strategy + laps-to-stop model | precision 0.54, recall 0.28 | 0.28 / 0.24 (plan-only rule) |
-| Laps until next stop | `survival_hz` | c-index 0.764, calibrated (pred/obs 1.03) | 0.752 (`gbm_hazard` extrapolated) |
-| Safety car within 2 laps | safety-car engineer | log loss 0.235 | 0.254 (circuit base rate) |
-| Qualifying knock-out | `quali` logit | log loss 0.418 | 0.493 (rank rule) |
-| Wet races: tyre-switch calls (2025-26) | wet engine | precision 0.18, recall 0.32 | 0.07 / 0.09 (rain-flag rule) |
+<!-- results:begin -->
+<!-- results:end -->
 
 Every engineer value goes into the benchmark rows, so the corrupted-future check (`pitsense leakcheck`) covers all of them. The simulator and calls have their own check (`pitsense strategy-leakcheck`). Full tables are in each engineer's doc.
 
@@ -191,11 +165,11 @@ Implement `fit(train_df, target)` and `predict(test_df)` (see `src/pitsense/benc
 
 ## Known limitations
 
-- **Live: one real race so far.** The recorder ran through the 2026 Bahrain GP with an F1 TV login (74k messages, about 37 reconnects) and the race rebuilds fully from it. The pit wall made no calls that day because of a wet-start bug, since fixed. Replayed through the fixed code, Ferrari's calls were still weak (BOX 1 of 8 right). Call quality on races like that is being worked on.
-- **Box calls are the weakest part.** Precision is 0.54 and recall 0.28 on 2026 (top 5 cars), with large differences between races: about 0.63 on Azerbaijan, about 0.53 on Bahrain, and much lower for some teams. Most stops under a safety car can't be foreseen a lap ahead. Calls are scored on whether they match what teams did, not on whether they would have gained time.
-- **Wet strategy is weak.** The wet engine makes tyre-class calls (BOX for INTERS / SLICKS), but only about 1 in 5 is right (precision 0.18, recall 0.32 on 2025-26 wet races, against 0.07 / 0.09 for the rain-flag rule). It also ignores rivals and traffic.
+- **Live: one real race so far.** The recorder ran through the 2026 Bahrain GP with an F1 TV login (74k messages, about 37 reconnects) and the race rebuilds fully from it. The pit wall made no calls that day because of a wet-start bug, since fixed. Call quality on races like that is being worked on.
+- **Box calls are the weakest part.** Precision and recall differ a lot between races (per-circuit table in `reports/results.md`), and most stops under a safety car can't be foreseen a lap ahead. Matching what the team did is scored separately from decision value, which is only a simulator estimate (see [Results](#results)).
+- **Wet strategy is weak.** The wet engine makes tyre-class calls (BOX for INTERS / SLICKS), but most of them are early or late (wet races are too few in 2026 to report here; see docs/engineers/strategy.md for the 2025-26 study). It also ignores rivals and traffic.
 - **Public timing only:** no fuel loads, tyre temperatures or car telemetry. PitSense is strongest on rivals, whom teams also see only through timing.
-- **Voice.** The fine-tuned SmolLM2-360M writes the radio calls: 0% fact errors on held-out 2026 data, with a guard fallback 0.3% of the time. Piper (British voice) speaks them offline. Each message takes about 1 s on the GPU.
+- **Voice.** The fine-tuned SmolLM2-360M writes the radio calls: fact-checked by a guard (held-out 2026 scores in [Results](#results)). Piper (British voice) speaks them offline. Each message takes about 1 s on the GPU.
 - **The simulator is simplified:** at most one SC and one VSC per simulated future, no red-flag restarts, no lapped traffic or blue flags, a fixed 6 s added to every stop for warm-up and traffic, and rivals that don't react to our stops.
 
 ## Roadmap
