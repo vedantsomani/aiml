@@ -242,10 +242,23 @@ within +-k laps). NO_CALL is not scored. `--cars 16 44` limits it, `--json` for 
   every car), whole race in 121 s (78x). Fine for live; at high replay speeds the tick is longer
   (`--speed 20` publishes every 60 session seconds).
 
-## 9. Troubleshooting
+## 9. Race day checklist
+
+Before connecting to live timing for a race:
+
+- [ ] Run `pitsense doctor` and confirm all checks pass.
+- [ ] Check disk space: `pitsense doctor` shows free space; need at least 5 GB for the race plus radio.
+- [ ] Load model bundle: `pitsense bench build` or verify the newest bundle is before race start UTC.
+- [ ] Voice working: toggle voice off/on in the web UI and listen to a test call.
+- [ ] Open the browser on all devices: camera, strategist, pit wall, phone if used (test the token).
+- [ ] Check `/api/health` for any RED alarms before the race starts; green light = ready.
+- [ ] Verify call log location: `pitsense doctor` and `/api/health` show the same path.
+
+## 10. Troubleshooting
 
 - "live recording needs the optional dependency": `pip install -e .[live]`.
 - Blank page, "connecting": the browser needs the stream; open `/api/health` to see the loop's status.
 - Nothing moves in follow mode: check `last_event_age_s` in `/api/health`; the recorder may be waiting
   for the session to start.
 - Model bundles are pickle: load only ones you trained yourself.
+- RED alarms in health: check the error log in the terminal; most indicate a configuration or dependency issue.
