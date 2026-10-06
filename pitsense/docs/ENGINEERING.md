@@ -244,3 +244,13 @@ Don't push, and don't touch other branches.
 - benchmark table: yours against the baseline, on 2026;
 - leakcheck results and core-leaderboard changes;
 - open issues, and anything you need from other engineers.
+
+## Working economically (agents)
+
+Token and compute use is a real cost. Every engineer works like this:
+
+- **Read narrowly.** grep/rg for the lines you need, then read small ranges; never dump whole large files or re-read what you already read.
+- **Print little.** Pipe through `| tail -n 20` or a grep; scripts write results to `data/scratch/*.json` and print one-line summaries.
+- **Run expensive jobs once.** Cache replays, traces and simulator results in `data/scratch`; tune by re-scoring cached results; score the test year once at the end.
+- **No sub-agents.** Plan briefly, then act.
+- **Short reports.** At most about 40 lines, with tables only for the key numbers.
