@@ -115,7 +115,7 @@ Dark, high contrast, one page.
 Today the head of strategy returns NO_CALL, so cards show NO CALL until it ships. Full `Call` records
 (action, compound, confidence, reasons, plans) render as soon as they arrive.
 
-## 6. API (JSON; read-only apart from the two ask endpoints)
+## 6. API (JSON; read-only apart from the ask and replay-control endpoints)
 
 | Endpoint | Content |
 |---|---|
@@ -126,6 +126,10 @@ Today the head of strategy returns NO_CALL, so cards show NO CALL until it ships
 | `GET /api/stream` | server-sent events: `snapshot` (the snapshot JSON), `pos` (car positions, about 3 Hz on the wall clock at any speed) and `status` |
 | `GET /api/teamradio?car=N&i=K` | the K-th real driver radio mp3 of car N (`audio/mpeg`); only published clips inside the session's `TeamRadio/` folder, anything else 404 |
 | `GET /api/radio.wav?car=N[&i=ID]` | our pit wall's voice message for car N (latest, or by `id` from `extra.wall_msgs`), spoken with Piper |
+| `GET /api/replay/marks` | replay state (`enabled`, `paused`, `speed` (0 = max), `lap`, `total_laps`, `checkpoints`, `indexed_lap`, `index_done`) and `marks`: `{id, kind, lap, t, car, label, ahead}`; `enabled: false` and no marks in live mode |
+| `POST /api/replay/pause`, `/resume` | `{}`; token-protected like every POST; 409 in live or follow mode |
+| `POST /api/replay/speed` | `{"speed": 1 \| 5 \| 20 \| "max"}` (any number up to 1000; 0 or "max" = as fast as possible) |
+| `POST /api/replay/seek` | `{"lap": 9}` or `{"mark": "<mark id>"}`; answers when the jump is done: `{ok, lap, t, via: "checkpoint"\|"replay", events_replayed, ms}` |
 | `POST /api/ask` | `{"car": "16", "text": "what if we box now?"}`: ask the pit wall (section 6b) |
 | `POST /api/ask_audio?car=N` | body = recorded audio (webm/opus, ogg, wav, mp4): transcribed on the server, then as `/api/ask` |
 
@@ -212,6 +216,45 @@ so it sees one still moment and the loop waits for the (short) answer. The voice
 **Speech to text** (`asr.py`): PyAV decodes the browser's webm/opus (no ffmpeg binary), then faster-whisper
 `small.en` through `radio.load_model` (GPU, CPU fallback; loaded on the first spoken question, about 3 s).
 Tests and other front ends can set `rt.transcriber = fn(bytes) -> str`.
+
+## 6c. Replay lab: pause, speed, jump, bookmarks
+
+A replay is an investigation tool. Under the top bar the page shows a **health bar** (red with one line per
+alarm from `health()["alarms"]`, green "No alarms" when clear; polled every 3 s; a server that does not answer
+is itself a red alarm) and, in replay mode only, the **replay bar**: Pause/Resume, speed 1x / 5x / 20x / max, a
+lap slider, "Go to lap" and a **timeline** of bookmarks (click one to jump to its lap): our calls (focus cars),
+real pit stops, SC / VSC / red flag, rain and mechanic alerts. Bookmarks dimmed "later in the race" are
+ahead of the current moment. They are drawn from the whole race, so the timeline shows the future to **you**;
+no engineer ever sees it (marks are never read by engineers or snapshots). In live and `--follow` modes the bar
+is hidden and every control answers 409.
+
+Jumps are leak-safe by construction. A jump to lap L means "the first event where the leader is on lap L or later".
+There are two ways to get there, and both give exactly what a straight play to that event gives (same snapshot,
+same calls and alerts, same engineer memory, compared as JSON without wall-clock fields; `tests/test_replaylab.py`):
+
+1. **Restore a checkpoint.** At the first event of every lap (`checkpoint_every`, default 1) the runtime saves a deep
+   copy of the race state, every engineer (memory, tyre/strategy/head-of-strategy state, call hysteresis) and the
+   runtime's own logs. A jump to that lap puts the copy back: no event is replayed, so it takes milliseconds. The
+   shared `Context` (models, history) is not copied.
+2. **Play forward silently** from the nearest earlier checkpoint (or the start, or the present if it is earlier)
+   through the normal handler, with the same snapshot cadence, until that event. Nothing after it is applied.
+   Checkpoints made on the way are kept.
+
+With `pitsense pitwall` on a replay, a second pass (a private runtime on the same log, silent) fills the
+checkpoints and bookmarks ahead of you; the bar says "ready to lap N" until every lap is prepared. A jump to a
+lap not prepared yet takes route 2, so it costs the engineers' time for the laps in between. If a deep copy ever
+fails (an engineer holding something uncopyable), checkpoints switch off and jumps replay from the start.
+
+Notes: the snapshot cadence is fixed by the speed given at start (`PUBLISH_EVERY_S x speed`, as before); changing
+speed later does not change it, which is what keeps jumps equal to a straight run. A jump drops questions asked
+with the ask box (they are not part of the race). Calls and alerts are written to the call-log file the first time
+they happen only; replaying a stretch again adds nothing to the file. Pausing does not raise the "feed stale"
+alarm. A replay that has finished plays on from the new place after a jump.
+
+Measured on the Bahrain 2026 race archive (one full play with checkpoints took 516 s; 56 checkpoints, pickled
+about 1.7 GB in total, so memory use grows with race length): a jump to lap 9 takes 0.5 s, to lap 43 2.6 s, to lap 20
+1.2 s, to lap 55 3.3 s (checkpoint restores). Without checkpoints, a cold jump to lap 9 took 77 s by replaying from
+the start. Snapshots, calls, alerts and counts after a jump to laps 9 and 43 were identical to a straight play.
 
 ## 7. The call log and shadow scoring
 

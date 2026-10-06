@@ -1364,7 +1364,8 @@ def cmd_pitwall(a) -> None:
 
     src = build_source(a)
     log_dir = Path(a.log_dir) if a.log_dir else data_dir() / "pitwall"
-    rt = PitWallRuntime(src, team=_team_config(a.team), log_dir=log_dir, models=not a.no_models)
+    rt = PitWallRuntime(src, team=_team_config(a.team), log_dir=log_dir, models=not a.no_models,
+                        index=getattr(src, "seekable", False))  # a replay: prepare every lap in the background so jumps are instant
     rt.start()
     server = serve(rt, host=a.host, port=a.port, token=a.token)
     port = server.server_address[1]
