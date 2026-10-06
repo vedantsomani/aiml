@@ -139,19 +139,34 @@ def weekend_sets(ref: SessionRef) -> dict[str, list[TyreSet]]:
     """Every set each car ran in this meeting's sessions that started before ``ref``.
 
     Read from those sessions' own streams, all published before ``ref`` starts. A session that
-    is not downloaded contributes nothing (see ``pitsense fetch --weekend``).
+    is not downloaded, or whose stream cannot be read, contributes nothing (see ``pitsense
+    fetch --weekend`` and ``sets_basis``).
     """
     out: dict[str, list[TyreSet]] = {}
     meta = {"year": ref.year, "meeting_name": ref.meeting_name}
     for s in before(ref):
-        for car, stints in session_stints(s.local_dir).items():
-            add_stints(out.setdefault(car, []), stints, s.session_name, meta)
+        try:
+            stints = session_stints(s.local_dir)
+        except Exception:  # a broken file loses that session, not the weekend
+            continue
+        for car, st in stints.items():
+            add_stints(out.setdefault(car, []), st, s.session_name, meta)
     return out
 
 
 def have_sessions(ref: SessionRef) -> list[str]:
     """Names of the earlier sessions of the weekend that are on disk."""
     return [s.session_name for s in before(ref) if (s.local_dir / "TimingAppData.jsonStream").exists()]
+
+
+def sets_basis(ref: SessionRef) -> tuple[str, int, int]:
+    """How much of the weekend the set book rests on: ("weekend" | "partial" | "allocation", on disk, expected).
+
+    "allocation": no earlier session is on disk, so only the standard allocation is known.
+    "partial": some are missing, so sets run there are not counted (new sets left is an upper bound).
+    """
+    want, got = len(before(ref)), len(have_sessions(ref))
+    return ("allocation" if got == 0 else "weekend" if got >= want else "partial"), got, want
 
 
 def is_sprint_weekend(ref: SessionRef) -> bool:
@@ -207,3 +222,14 @@ def add_commands(sub) -> None:
     s.add_argument("--sprint", action="store_true")
     s.add_argument("--returned", nargs="+", help="sets handed back, e.g. S=1 H=0 (not in the feed)")
     s.set_defaults(fn=cmd_tyresets)
+
+
+def availability(sets: list[TyreSet], alloc: dict[str, int]) -> dict[str, dict]:
+    """Per compound what the car can still fit: new sets left, free used sets and the laps on the freshest one."""
+    left = remaining(sets, alloc)
+    out = {}
+    for c in DRY:
+        free = [t.laps for t in sets if t.compound == c and not t.mounted and not t.first or
+                t.compound == c and not t.mounted and t.first]
+        out[c] = {"new": left[c], "used": len(free), "used_laps": min(free) if free else None}
+    return out
