@@ -43,6 +43,28 @@ from ..engineer import Engineer
 
 PASS_THROUGH_EXTRA_S = 3.0  # a real stop while the field drives through: stationary time + slowing into the box
 HISTORY_STOPS_PER_TEAM = 30  # stationary times remembered per team from past races
+# Crew prior: a team's stationary time against the field, as the weighted median of its deviations from
+# each past race's median (so circuits and years cancel), earlier races weighing ``CREW_DECAY`` per race,
+# shrunk toward the field by n / (n + ``CREW_SHRINK``). Chosen on 2025 (stationary-time MAE 0.929 -> 0.899).
+CREW_DECAY = 0.9
+CREW_SHRINK = 6.0
+# one crew under two names (the team kept its garage and people)
+TEAM_ALIAS = {"Kick Sauber": "Audi", "Alfa Romeo": "Audi", "Sauber": "Audi", "AlphaTauri": "Racing Bulls",
+              "Scuderia AlphaTauri": "Racing Bulls", "RB": "Racing Bulls", "Haas F1 Team": "Haas"}
+
+
+def _crew(team: str) -> str:
+    return TEAM_ALIAS.get(team, team)
+
+
+def _weighted_median(values: list[float], weights: list[float]) -> float:
+    order = sorted(range(len(values)), key=values.__getitem__)
+    total, acc = sum(weights), 0.0
+    for i in order:
+        acc += weights[i]
+        if acc >= total / 2:
+            return values[i]
+    return values[order[-1]]
 
 
 def _number(x) -> float | None:
@@ -64,7 +86,7 @@ class PitStopEngineer(Engineer):
         super().__init__(ctx, memory)
         self._prior: LossPrior | None = None
         self._rates: CoStopRates | None = None
-        self._stat_history: dict[str, list[float]] = {}
+        self._stat_devs: dict[str, list[tuple[float, float]]] = {}  # crew -> (deviation from its race's median, weight)
         self._stat_field_history: list[float] = []
         self._measured: dict[int, StopLoss] = {}  # pit event index -> measured loss
         self._pending: list[int] = []
@@ -80,11 +102,17 @@ class PitStopEngineer(Engineer):
                 if isinstance(s.extra.get("pitstop"), dict)]
         self._prior = loss_prior(past, self.ctx.meta.get("circuit_key"))
         self._rates = CoStopRates.merged(s.get("costop", {}) for _, s in past)
+        for age, (_, s) in enumerate(reversed(past)):  # age 0 = the latest earlier race
+            stat = s.get("stationary") or {}
+            every = [x for times in stat.values() for x in times]
+            if not every:
+                continue
+            med = median(every)
+            for team, times in stat.items():
+                self._stat_devs.setdefault(_crew(team), []).extend((x - med, CREW_DECAY ** age) for x in times)
         for _, s in past:
-            for team, times in (s.get("stationary") or {}).items():
-                self._stat_history.setdefault(team, []).extend(times)
+            for times in (s.get("stationary") or {}).values():
                 self._stat_field_history.extend(times)
-        self._stat_history = {k: v[-HISTORY_STOPS_PER_TEAM:] for k, v in self._stat_history.items()}
         self._stat_field_history = self._stat_field_history[-10 * HISTORY_STOPS_PER_TEAM:]
 
     @property
@@ -147,10 +175,17 @@ class PitStopEngineer(Engineer):
         field = self._stat_field_history + [x for v in self._stat_race.values() for x in v]
         if not field:
             return None, None
-        mine = self._stat_history.get(team, []) + self._stat_race.get(team, [])
         field_s = median(field[-10 * HISTORY_STOPS_PER_TEAM:])
-        team_s = median(mine[-HISTORY_STOPS_PER_TEAM:]) if len(mine) >= 3 else field_s
-        return team_s, field_s
+        crew = _crew(team)
+        devs = list(self._stat_devs.get(crew, ()))
+        for t, times in self._stat_race.items():  # this race's stops count as the latest race
+            if _crew(t) == crew:
+                devs.extend((x - field_s, 1.0) for x in times)
+        if not devs:
+            return field_s, field_s
+        n = sum(w for _, w in devs)
+        adj = _weighted_median([d for d, _ in devs], [w for _, w in devs]) * n / (n + CREW_SHRINK)
+        return field_s + adj, field_s
 
     # ------------------------------------------------------------------ values
     def race(self, state, view):

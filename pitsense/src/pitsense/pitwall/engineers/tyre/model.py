@@ -52,6 +52,10 @@ class Priors:
     stint_sd: float = 0.25  # stint level around base + offset - fuel * start (step 2)
     first_lap: float = 0.0  # first flying lap on a new set vs the model, s
     source: str = "default"
+    # per-compound sds of ``net`` (S, M, H) and of the SOFT / HARD ``off``, when the race-start prior
+    # knows some compounds better than others (circuit history, practice); else ``net_sd`` / ``off_sd``
+    net_sds: tuple[float, float, float] | None = None
+    off_sds: tuple[float, float] | None = None
 
     @property
     def deg(self) -> tuple[float, float, float]:
@@ -99,7 +103,7 @@ def fit_field(drivers: list[str], lap: np.ndarray, age: np.ndarray, comp: np.nda
     sid = np.array([index[k] for k in keys])
     ns = len(names)
     s2 = pri.noise ** 2
-    p_net = 1 / pri.net_sd ** 2
+    p_net = 1 / np.array(pri.net_sds or (pri.net_sd,) * 3) ** 2
     net = np.array(pri.net, dtype=float)
     rw = np.ones(n)
     # ---- step 1: net slope by compound, one free level per stint
@@ -113,7 +117,7 @@ def fit_field(drivers: list[str], lap: np.ndarray, age: np.ndarray, comp: np.nda
             m = comp == c
             sxx = float((ww[m] * da[m] ** 2).sum()) / s2
             sxy = float((ww[m] * da[m] * dt[m]).sum()) / s2
-            net[c] = (sxy + p_net * pri.net[c]) / (sxx + p_net)
+            net[c] = (sxy + p_net[c] * pri.net[c]) / (sxx + p_net[c])
         r = dt - net[comp] * da
         if it < iters:
             rw = _huber_w(r, 1.5 * pri.noise)
@@ -140,7 +144,7 @@ def fit_field(drivers: list[str], lap: np.ndarray, age: np.ndarray, comp: np.nda
     mu = np.zeros(nd + 3)
     prec = np.full(nd + 3, 1e-8)
     mu[nd], mu[nd + 1], mu[nd + 2] = pri.off[0] - pri.off[1], pri.off[2] - pri.off[1], pri.fuel
-    prec[nd:nd + 2] = 1 / pri.off_sd ** 2
+    prec[nd:nd + 2] = 1 / np.array(pri.off_sds or (pri.off_sd,) * 2) ** 2
     prec[nd + 2] = 1 / pri.fuel_sd ** 2
     H = X.T @ (X * prec_w[:, None]) + np.diag(prec)
     beta = np.linalg.solve(H, X.T @ (prec_w * level) + prec * mu)

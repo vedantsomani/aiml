@@ -27,6 +27,7 @@ from statistics import median
 
 import numpy as np
 
+from .... import practice
 from ...engineer import Engineer
 from ...memory import is_clean
 from .model import CI, DRY, Priors, expected, fit_car, fit_field, prior_fit
@@ -36,6 +37,11 @@ TRAFFIC_S = 1.0  # a lap started within this many seconds of the car ahead may b
 TRAFFIC_W = 0.5  # weight of such a lap in the fits
 RACING = 1.07  # a clean lap slower than this times the reference isn't racing pace
 RACING_RANK = 5  # the reference: the field's 5th-fastest clean lap so far
+
+# Race-start prior: where the compound slopes / offsets come from before this race has laps.
+# Defaults, shrunk toward the circuit's earlier races, shrunk toward this weekend's practice long runs
+# (``practice.py``); the in-race fit takes over as laps arrive (the prior enters as pseudo-observations).
+PRIOR_SOURCES = ("circuit", "practice")
 
 
 # cliff_risk: logistic on age / typical life, race fraction, free air, pace residuals and the set's
@@ -54,12 +60,17 @@ def _r(x: float | None, nd: int = 3) -> float | None:
 
 class TyreEngineer(Engineer):
     name = "tyre"
+
+    @classmethod
+    def summarize_race(cls, final, meta):
+        return practice.fit_race(final) or {}
+
     features = ("pace_s", "deg_s_per_lap", "fuel_s_per_lap", "cliff_risk", "pace_sd_s", "resid_trend_s",
                 "fresh_soft_s", "fresh_medium_s", "fresh_hard_s")
 
     def __init__(self, ctx, memory) -> None:
         super().__init__(ctx, memory)
-        self.pri = Priors()
+        self.pri = self._start_prior()
         self._n_laps = 0
         self._n_at_fit = 0
         self._stints: dict[str, dict[int, tuple[int, int, str]]] = {}  # car -> stint -> (fit lap, age, compound)
@@ -68,6 +79,18 @@ class TyreEngineer(Engineer):
         self._ff_version = 0
         self._cap = math.inf  # racing-pace limit, from the last refit
         self._cache: dict[str, tuple[tuple, dict]] = {}
+
+    def _start_prior(self) -> Priors:
+        """Defaults -> circuit history -> practice, by precision. Anything missing is skipped."""
+        hist = prac = None
+        try:
+            if "circuit" in PRIOR_SOURCES:
+                hist = practice.circuit_history(self.ctx.past_races, self.ctx.meta.get("circuit_key"))
+            if "practice" in PRIOR_SOURCES:
+                prac = practice.practice_estimate(self.ctx.meta)
+        except Exception:  # unreadable history or practice: unknown, never guessed
+            hist = prac = None
+        return practice.blend(Priors(), hist, prac)[0]
 
     # ------------------------------------------------------------------ bookkeeping
     def _note(self, d) -> None:
