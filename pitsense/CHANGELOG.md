@@ -50,3 +50,28 @@ Decisions for the viewer spec (simplest option that keeps replay == live and lea
   predicted position) and **undercut threat lines** (car behind -> threatened car when `rivals__undercut_threat`
   >= 0.35), for our cars or, with "all cars", the whole field.
 - The snapshot's `predictions` block (Phase 2) carries the numbers behind them with `as_of` and the model bundle.
+
+### Phase 5: analysis panels (Analysis tab, `GET /api/analysis`)
+- `insights.py`, on any live or recorded race state, as of now. Clean laps: a lap time, not lap 1, no in / out lap,
+  green flag the whole lap, at least 1.0 s to the car ahead; fuel-corrected with a linear 0.055 s/lap term.
+- **Tyre degradation**: per car and stint, lap time against tyre age with the fitted line, its 80 % band (residual
+  10th-90th percentiles) and the rate in s/lap. The fit is behind `insights.DegFit` (`LinearDeg` now) so a Kalman
+  state estimator can replace it.
+- **Track evolution**: median clean lap per lap and its trend (s/lap), also published as the tyre engineer's
+  `track_evo_s_per_lap` race value (a feature for the pace model).
+- **Two drivers**: lap-time overlay, the gap at each line crossing, per-stint pace delta.
+- **Speed trace**: speed against distance for a lap, CarData aligned to distance through Position.
+  Simplifications: no sector markers (sector times are not kept in the lap record); only laps still in the feeds'
+  window (about ten minutes of telemetry per car) can be traced.
+- The rival-cover model (in the first commit of this branch) is now **off by default**: on the 2026 races it did not
+  improve the calls (box precision 0.536 -> 0.533, stop recall 0.448 -> 0.434, stay-out 0.932 -> 0.935).
+
+### Phase 6: driving coach (Analysis tab, "driving coach")
+- `coach.py`: two laps (a driver against another driver's lap, or against their own best clean lap) resampled onto
+  a 5 m distance grid; cumulative time delta; corners from the reference lap's speed minima; per corner the brake
+  point, minimum speed and full-throttle differences and the time lost; the top three as sentences ("Turn 1: brake
+  30 m earlier, -12 km/h min speed, potential gain 0.21 s") and the reference line coloured by where time goes.
+- Telemetry through an adapter (`coach.LapSource`); only `F1Adapter` is implemented. Corners are numbered in the
+  order driven, not by the circuit's official turn numbers.
+- Checked on Suzuka 2026 (NOR's best lap against PIA's): -0.89 s on the distance grid against -0.62 s by lap times
+  (telemetry is sampled at about 4 Hz).

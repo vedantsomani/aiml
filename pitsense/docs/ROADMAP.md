@@ -19,9 +19,10 @@ difficulty per circuit, pit loss by track status, a risk setting (`--risk expect
 teammate double stack under green flag (`head.double_stack`), and wet races on their own simulator.
 
 Open, by value:
-- **Rivals that react, fully:** the car directly ahead now covers our undercut with its team's learnt cover rate
-  (`analysis.rival_cover`); the rest of the field still follows its own sampled plans. Full reactions need opponent
-  trajectories per candidate plan (today they are shared by every plan).
+- **Rivals that react:** a first model (the car ahead covers our undercut at its team's learnt rate,
+  `analysis.rival_cover`) did not improve the 2026 calls and is off. Full reactions need opponent trajectories per
+  candidate plan (today they are shared by every plan), and should be judged on decision value, not only on
+  agreement with the team's real stops.
 - **Teammates fully planned together:** both cars' plans optimised jointly (stop order, split strategies), beyond
   the double-stack rule.
 - **Wet v2:** crossover laps per circuit, a drying-line model, and the field (positions) in the wet simulator.

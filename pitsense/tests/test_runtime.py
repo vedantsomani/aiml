@@ -503,3 +503,13 @@ def test_replay_and_live_follow_make_the_same_calls(tmp_path):
 
     live = calls(FollowSource(path, follow=False, radio=False))
     assert live and calls(ReplaySource(load_recording(path), 0)) == live
+
+
+def test_analysis_api_answers_each_panel_or_says_why_not():
+    rt = run_replay()
+    assert rt.analysis("deg")["ok"] and rt.analysis("evolution")["ok"]
+    c = rt.analysis("compare", "22", "11")
+    assert c["ok"] and c["a"] == "22" and len(c["laps"]) == len(c["gap_s"])
+    assert rt.analysis("trace", "22", lap=3)["ok"] is False  # the synthetic race has no telemetry
+    assert rt.analysis("coach", "22", lap="x")["ok"] is False and rt.analysis("nope")["ok"] is False
+    assert rt.analysis("deg", "99")["error"] == "unknown car"

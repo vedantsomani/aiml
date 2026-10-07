@@ -5,6 +5,7 @@
     GET /api/calls         {"current": [...], "log": [...]}
     GET /api/alerts        {"active": [...], "log": [...]}
     GET /api/health        loop status, throughput, snapshot latency, model bundle
+    GET /api/analysis      ?kind=deg|evolution|compare|trace|coach&car=N[&other=M][&lap=L][&ref_lap=R]: analysis panels as of now
     GET /api/replay/marks  replay controls state and bookmarks (calls, stops, SC/VSC, rain, mechanic alerts); enabled=false when live
     POST /api/replay/pause|resume|speed|seek   {} | {} | {"speed": 1|5|20|"max"} | {"lap": N} or {"mark": id}; 409 in live mode
     GET /api/stream        server-sent events: "snapshot" (the snapshot JSON), "pos" (car positions, ~3 Hz), "status"
@@ -240,6 +241,12 @@ def _handler(rt, token: str | None = None, max_viewers: int = MAX_VIEWERS):
                     self._json(rt.alerts())
                 elif path == "/api/health":
                     self._json(rt.health())
+                elif path == "/api/analysis":
+                    from urllib.parse import parse_qs
+
+                    q = {k: v[0] for k, v in parse_qs(self.path.partition("?")[2]).items()}
+                    out = rt.analysis(q.get("kind", ""), q.get("car") or None, q.get("other") or None, q.get("lap"), q.get("ref_lap"))
+                    self._json(out, 200 if out.get("ok") else 422)
                 elif path == "/api/replay/marks":
                     self._json(rt.replay_marks())
                 elif path == "/api/stream":

@@ -77,6 +77,13 @@
     <section class="panel" data-tab="strategy"><h2>Call history <small>our calls on a lap axis</small></h2><div id="callhist"></div></section>
     <section class="panel" data-tab="team"><h2>Our cars <small id="focusnote"></small></h2><div id="focus"></div></section>
     <section class="panel" data-tab="team"><h2>Driver <small>live telemetry of our cars</small></h2><div id="drivercard" class="drv"></div></section>
+    <section class="panel" data-tab="analysis"><h2>Analysis <small>as of now &middot; clean laps: green, no lap 1, no in/out laps, &ge; 1 s to the car ahead, fuel-corrected</small></h2>
+      <form id="anform" class="anform">
+        <select id="ankind" aria-label="panel"><option value="deg">tyre degradation</option><option value="evolution">track evolution</option><option value="compare">compare two drivers</option><option value="trace">speed trace</option><option value="coach">driving coach</option></select>
+        <select id="ana" aria-label="driver"></select><select id="anb" aria-label="second driver"><option value="">(second driver)</option></select>
+        <input id="anlap" type="number" min="1" placeholder="lap" aria-label="lap"><input id="anref" type="number" min="1" placeholder="ref lap" aria-label="reference lap">
+        <button id="anbtn">show</button>
+      </form><div id="anout"></div></section>
     <section class="panel" data-tab="season"><h2>Championship <small>before this race, and if it finished in the current order</small></h2><div id="champ"></div></section>
     <section class="panel" data-tab="alerts"><h2>Alerts</h2><div id="alerts"></div></section>
     <section class="panel" data-tab="alerts"><h2>Race control</h2><div id="rc"></div></section>

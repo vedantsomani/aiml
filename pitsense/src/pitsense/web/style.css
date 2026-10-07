@@ -229,3 +229,9 @@ main>*,aside>*{min-width:0}
 .over .ghostlab { fill: var(--accent); font-size: 11px; }
 .over .threat { stroke: #ff6b6b; stroke-width: 2.5; stroke-dasharray: 6 4; }
 .ovt { float: right; font-size: .75em; font-weight: normal; }
+
+/* analysis panels */
+.anform { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.anform input { width: 6em; }
+.anchart { width: 100%; height: auto; max-height: 260px; }
+.anchart text { font-size: 11px; fill: var(--dim); }

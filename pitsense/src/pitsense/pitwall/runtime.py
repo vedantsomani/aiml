@@ -1268,6 +1268,44 @@ class PitWallRuntime:
             hist = list(self.calls_log)
         return {"current": cur, "log": hist, "acks": list(self.acks_log)}
 
+    def analysis(self, kind: str, car: str | None = None, other: str | None = None, lap=None, ref_lap=None) -> dict:
+        """The analysis panels as of now (``pitsense.insights``, ``pitsense.coach``): deg | evolution | compare | trace |
+        coach. ``coach`` compares ``car``'s ``lap`` with ``other``'s ``ref_lap`` (default: ``car``'s own best clean lap)."""
+        from .. import coach as C
+        from .. import insights as I
+
+        def as_lap(v):
+            try:
+                return int(v) if v not in (None, "") else None
+            except (TypeError, ValueError):
+                return -1
+
+        lap, ref_lap = as_lap(lap), as_lap(ref_lap)
+        if -1 in (lap, ref_lap):
+            return {"ok": False, "error": "lap must be a whole number"}
+        with self.sim_lock:
+            st = self.state
+            if car is not None and car not in st.drivers or other not in (None, "") and other not in st.drivers:
+                return {"ok": False, "error": "unknown car"}
+            if kind == "deg":
+                return {"ok": True, "kind": kind, "stints": I.tyre_deg(st, [car] if car else None)}
+            if kind == "evolution":
+                return {"ok": True, "kind": kind, **I.track_evolution(st)}
+            if kind == "compare" and car and other:
+                return {"ok": True, "kind": kind, **I.compare(st, car, other)}
+            if kind == "trace" and car and lap:
+                tr = I.speed_trace(st, car, lap)
+                return {"ok": True, "kind": kind, **tr} if tr else {"ok": False, "error": "no telemetry for that lap (the feeds keep about ten minutes)"}
+            if kind == "coach" and car and lap:
+                src = C.F1Adapter(st)
+                rc = other or car
+                rl = ref_lap or src.best_lap(rc)
+                a, b = (src.lap(rc, rl) if rl else None), src.lap(car, lap)
+                if a is None or b is None:
+                    return {"ok": False, "error": "no telemetry for one of the laps (the feeds keep about ten minutes)"}
+                return {"ok": True, "kind": kind, **C.compare(a, b)}
+        return {"ok": False, "error": "kind must be deg, evolution, compare (car, other), trace (car, lap) or coach (car, lap)"}
+
     def set_risk(self, risk) -> dict:
         """How the strategy ranks plans from now on (expected | protect | aggressive); the next decision replans."""
         import dataclasses

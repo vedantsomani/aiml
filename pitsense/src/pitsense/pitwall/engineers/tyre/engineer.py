@@ -251,4 +251,14 @@ class TyreEngineer(Engineer):
             "off_soft_s": _r(ff.off[0]),
             "off_hard_s": _r(ff.off[2]),
             "field_laps": ff.n,
+            "track_evo_s_per_lap": self._evolution(state),  # median clean lap trend (insights.track_evolution)
         }
+
+    def _evolution(self, state):
+        """Track evolution (s per lap, negative = quicker), refreshed once per leader lap."""
+        lap = state.current_lap
+        if getattr(self, "_evo", (None,))[0] != lap:
+            from ....insights import track_evolution
+
+            self._evo = (lap, track_evolution(state)["evo_s_per_lap"])
+        return self._evo[1]

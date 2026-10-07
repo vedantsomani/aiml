@@ -61,6 +61,20 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]" && pytest -q
 ```
 
+## The viewer (dashboard)
+
+No Node or build step: the dashboard ships with the package and is served by `pitsense pitwall` (alias `pitsense serve`).
+
+```powershell
+.venv\Scripts\Activate.ps1
+pitsense fetch --year 2026 --race japan --telemetry      # timing + CarData/Position for the map, telemetry and coach
+pitsense standings --year 2026                           # season results for the championship panel
+pitsense serve --year 2026 --race japan --speed 8 --team ferrari
+# open http://127.0.0.1:8765/  (tabs: Tower, Map, Radio, Team, Strategy, Alerts, Season, Analysis)
+pitsense record --out data\liveace.jsonl              # live: record (all topics; --topics to restrict) ...
+pitsense pitwall --live --team ferrari                   # ... or record and follow in one go
+```
+
 ## Quick start
 
 ```bash

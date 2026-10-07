@@ -1012,3 +1012,65 @@ $("timeline").addEventListener("click", (e) => {
 });
 pollReplay(); setInterval(pollReplay, 4000);
 $("ovall").addEventListener("change", drawOverlays);
+
+// ---- analysis panels (GET /api/analysis): a small SVG line chart for each
+function lineChart(series, xl, yl) {  // series: [{name, pts: [[x, y]...], color, dash}]
+  const W = 640, H = 220, L = 46, B = 26, all = series.flatMap((s) => s.pts.filter((p) => p[1] != null));
+  if (!all.length) return '<div class="empty">no data</div>';
+  const xs = all.map((p) => p[0]), ys = all.map((p) => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs) || 1, y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const X = (x) => L + (W - L - 8) * (x - x0) / ((x1 - x0) || 1), Y = (y) => H - B - (H - B - 8) * (y - y0) / ((y1 - y0) || 1);
+  const path = (s) => s.pts.filter((p) => p[1] != null).map((p, i) => (i ? "L" : "M") + X(p[0]).toFixed(1) + " " + Y(p[1]).toFixed(1)).join("");
+  return '<svg viewBox="0 0 ' + W + " " + H + '" class="anchart"><text x="4" y="12" class="dim">' + esc(yl) + "</text>" +
+    '<text x="' + (W - 4) + '" y="' + (H - 6) + '" text-anchor="end" class="dim">' + esc(xl) + "</text>" +
+    '<text x="4" y="' + (H - B) + '" class="dim">' + num(y0, 1) + '</text><text x="4" y="22" class="dim">' + num(y1, 1) + "</text>" +
+    series.map((s) => '<path d="' + path(s) + '" fill="none" stroke="' + (s.color || "var(--accent)") + '" stroke-width="1.6"' +
+      (s.dash ? ' stroke-dasharray="4 3"' : "") + "><title>" + esc(s.name) + "</title></path>").join("") + "</svg>" +
+    '<div class="ch-leg">' + series.filter((s) => s.name).map((s) => '<span><i style="background:' + (s.color || "var(--accent)") + '"></i>' + esc(s.name) + "</span>").join("") + "</div>";
+}
+const ANCOL = ["#19e3c3", "#ff8a3d", "#7aa2ff", "#e05cff", "#ffd23d", "#6bff6b"];
+function anView(r) {
+  if (!r.ok) return '<div class="empty">' + esc(r.error || "no answer") + "</div>";
+  if (r.kind === "deg") {
+    const st = r.stints.filter((s) => s.line).slice(0, 6);
+    return lineChart(st.flatMap((s, i) => [{name: s.tla + " " + (s.compound || "") + " " + num(s.deg_s_per_lap, 3) + " s/lap", color: ANCOL[i % 6], pts: s.points},
+      {color: ANCOL[i % 6], dash: true, pts: [s.points[0][0], s.points[s.points.length - 1][0]].map((a) => [a, s.line[0] + s.line[1] * a])}]),
+      "tyre age (laps)", "lap time, fuel-corrected (s)") +
+      "<p>" + r.stints.map((s) => esc(s.tla) + " stint " + s.stint + " " + esc(s.compound || "") + ": " + (s.deg_s_per_lap == null ? "too few clean laps" : num(s.deg_s_per_lap, 3) + " s/lap, 80% band " + num(s.band[0], 2) + "/+" + num(s.band[1], 2) + " s (" + s.n + " laps)")).join("<br>") + "</p>";
+  }
+  if (r.kind === "evolution") return lineChart([{name: "median clean lap", pts: r.laps.map((l, i) => [l, r.median_s[i]])}], "lap", "s") +
+    "<p>Track evolution: " + (r.evo_s_per_lap == null ? "not enough laps" : num(r.evo_s_per_lap, 3) + " s per lap (negative: the track is getting quicker)") + "</p>";
+  if (r.kind === "compare") return lineChart([{name: r.tla[r.a], pts: r.laps.map((l, i) => [l, r.lap_time.a[i]])}, {name: r.tla[r.b], color: ANCOL[1], pts: r.laps.map((l, i) => [l, r.lap_time.b[i]])}], "lap", "lap time (s)") +
+    lineChart([{name: "gap " + r.tla[r.a] + " to " + r.tla[r.b] + " (+ = behind)", color: ANCOL[2], pts: r.laps.map((l, i) => [l, r.gap_s[i]])}], "lap", "gap (s)") +
+    "<p>" + r.stints.map((s) => "Stint " + s.stint + " (L" + s.laps[0] + "-" + s.laps[1] + ", " + esc(s.compound || "") + "): " + (s.delta_s == null ? "no clean laps to compare" : (s.delta_s > 0 ? "+" : "") + num(s.delta_s, 3) + " s/lap")).join("<br>") + "</p>";
+  if (r.kind === "trace") return lineChart([{name: "lap " + r.lap, pts: r.dist.map((d, i) => [d, r.speed[i]])}], "distance (m)", "speed (km/h)");
+  if (r.kind === "coach") return lineChart([{name: "time delta (+ = slower than the reference)", color: ANCOL[1], pts: r.dist.map((d, i) => [d, r.delta[i]])}], "distance (m)", "delta (s)") +
+    deltaMap(r.track) + "<p>Total " + (r.total_s > 0 ? "+" : "") + num(r.total_s, 3) + " s against " + esc(r.ref.driver) + " lap " + r.ref.lap + ".</p><p>" + (r.tips.length ? r.tips.map(esc).join("<br>") : "No corner loses time.") + "</p>";
+  return "";
+}
+function deltaMap(seg) {  // the reference line: red where this lap loses time, green where it gains
+  if (!seg || seg.length < 10) return "";
+  const xs = seg.map((p) => p[0]), ys = seg.map((p) => p[1]), x0 = Math.min(...xs), y0 = Math.min(...ys);
+  const k = 300 / Math.max(Math.max(...xs) - x0, Math.max(...ys) - y0, 1), m = Math.max(...seg.map((p) => Math.abs(p[2]))) || 1;
+  let out = "";
+  for (let i = 1; i < seg.length; i++) {
+    const d = seg[i][2] / m, col = d > 0 ? "rgba(224,72,72," + (0.25 + 0.75 * d).toFixed(2) + ")" : "rgba(60,180,90," + (0.25 - 0.75 * d).toFixed(2) + ")";
+    out += '<line x1="' + ((seg[i - 1][0] - x0) * k + 10).toFixed(0) + '" y1="' + (310 - (seg[i - 1][1] - y0) * k).toFixed(0) + '" x2="' + ((seg[i][0] - x0) * k + 10).toFixed(0) +
+      '" y2="' + (310 - (seg[i][1] - y0) * k).toFixed(0) + '" stroke="' + col + '" stroke-width="5" stroke-linecap="round"/>';
+  }
+  return '<svg viewBox="0 0 320 320" class="anchart" style="max-height:240px">' + out + "</svg>";
+}
+function anCars() {
+  if (!snap) return;
+  const opts = (snap.tower || []).map((r) => '<option value="' + esc(r.car) + '">' + esc(r.tla || r.car) + "</option>").join("");
+  for (const id of ["ana", "anb"]) { const s = $(id), v = s.value; if (s.options.length <= 1) { s.insertAdjacentHTML("beforeend", opts); if (v) s.value = v; } }
+}
+$("anform").addEventListener("submit", (e) => {
+  e.preventDefault();
+  anCars();
+  const q = new URLSearchParams({kind: $("ankind").value, car: $("ana").value, other: $("anb").value, lap: $("anlap").value, ref_lap: $("anref").value});
+  $("anout").innerHTML = '<div class="empty">working...</div>';
+  fetch("/api/analysis?" + q).then((r) => r.json()).then((r) => { $("anout").innerHTML = anView(r); })
+    .catch(() => { $("anout").innerHTML = '<div class="empty">the pit wall did not answer</div>'; });
+});
+setInterval(anCars, 3000);

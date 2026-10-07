@@ -27,7 +27,9 @@ CIDX = {c: i for i, c in enumerate(DRY)}
 
 # search and decision settings (tuned on 2025; see docs/engineers/strategy.md)
 SETTINGS = {
-    "rival_cover": True,  # the car ahead may cover our undercut (its team's learnt cover rate); see rival_cover()
+    # the car ahead may cover our undercut (its team's learnt cover rate); see rival_cover(). Off: on the 2026 races it
+    # did not improve the calls (box precision 0.536 -> 0.533, stop recall 0.448 -> 0.434, stay-out 0.932 -> 0.935)
+    "rival_cover": False,
     "S": 288,  # simulated futures
     "S1": 96,  # futures used to screen the candidate plans
     "S_B": 160,  # futures in the safety-car scenario
