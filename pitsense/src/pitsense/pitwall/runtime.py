@@ -61,6 +61,7 @@ POS_MIN_WALL_S = 0.3  # ...and never faster than ~3 Hz on the wall clock (high r
 RADIO_EVERY_WALL_S = 1.0  # how often the team-radio list is rebuilt
 RADIO_KEEP = 80  # driver radio messages in the snapshot
 WALL_KEEP = 120  # pit-wall conversation entries (voice calls and alerts) in the snapshot
+SNAPSHOT_SCHEMA = 2  # snapshot layout version: 2 adds "schema", "predictions" and extra.telemetry
 SNAP_MS_KEEP = 1000  # snapshot build times kept for health()
 VOICE_QUEUE = 4  # calls waiting for the voice (one per car; when full the oldest is dropped)
 ASK_WAIT_S = 10.0  # a question waits this long for the one running before it, then gets "busy"
@@ -628,6 +629,8 @@ class PitWallRuntime:
             log.exception("chart history failed at t=%.1f", state.t)
         d["extra"]["radio"] = dict(self.radio)
         d["extra"].update(self._feed_extra(state))
+        d["schema"] = SNAPSHOT_SCHEMA
+        d["predictions"] = self._predictions(state, d)
         payload = _json_bytes(d)
         ms = (time.perf_counter() - t0) * 1000
         self.snap_ms.append(ms)
@@ -729,8 +732,31 @@ class PitWallRuntime:
         self.positions = self._positions()
         self._pos_t = state.t
         return {"positions": {"t": round(state.t, 1), "cars": self.positions},
-                "track": self.track, "team_radio": self._team_radio(True),
+                "track": self.track, "team_radio": self._team_radio(True), "telemetry": self._telemetry(),
                 "wall_msgs": list(self.wall_msgs)}
+
+    def _telemetry(self) -> dict:
+        """Newest published CarData sample of every car: {car: [speed, gear, throttle, brake, drs, rpm]} (as-of)."""
+        try:
+            raw = self.state.feeds.telemetry.latest_telemetry()
+        except Exception:
+            return {}
+
+        def num(v):
+            return None if v is None or v != v else round(float(v))
+
+        return {c: [num(x.get(k)) for k in ("speed", "gear", "throttle", "brake", "drs", "rpm")] for c, x in raw.items()}
+
+    def _predictions(self, state: RaceState, d: dict) -> dict:
+        """What the models said, pre-registered with when: ``as_of`` (session time of the decision), ``input_t``
+        (newest feed message used) and the model bundle; per car the pit probabilities and the rejoin position."""
+        cars = {}
+        for n, v in (d.get("cars") or {}).items():
+            p1 = v.get("models__pit_prob_1", v.get("rivals__pit_prob_1"))
+            p3 = v.get("models__pit_prob_3", v.get("rivals__pit_prob_3"))
+            cars[n] = {"pit_prob_1": p1, "pit_prob_3": p3, "rejoin_if_box_now": v.get("pitstop__rejoin_if_box_now"),
+                       "undercut_threat": v.get("rivals__undercut_threat")}
+        return {"as_of": round(state.t, 3), "input_t": round(state.t, 3), "model": self.model_info, "cars": cars}
 
     def _maybe_push_positions(self) -> None:
         """A light "pos" event: car positions (and radio changes) between snapshots, about 3 Hz on the wall clock."""
@@ -743,7 +769,7 @@ class PitWallRuntime:
         self.positions = pos = self._positions()
         if not pos:
             return
-        msg = {"t": round(state.t, 1), "speed": self.source.speed, "cars": pos}
+        msg = {"t": round(state.t, 1), "speed": self.source.speed, "cars": pos, "telemetry": self._telemetry()}
         radio = self._team_radio()
         sig = (len(radio), sum(1 for r in radio if r["text"]))
         if sig != self._radio_sig:

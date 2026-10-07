@@ -18,3 +18,14 @@ Decisions for the viewer spec (simplest option that keeps replay == live and lea
   kept and unknown names are refused.
 - New test: corrupting every weather, CarData and Position message after t leaves the state and every feed query
   up to t bit-identical; asking past the newest message raises `LeakageError`.
+
+### Phase 2: viewer backend
+- Already in place: `pitsense pitwall` serves the dashboard, a JSON API and server-sent events; replay play / pause /
+  speed / seek by lap or bookmark, rebuilt from lap checkpoints and never reading past the seek point; track outlines
+  derived from Position data and cached per circuit (`trackmap.py`); end state of a followed recording equals replay.
+- New: `pitsense serve` (alias of `pitwall`). Snapshots carry `schema` (`SNAPSHOT_SCHEMA = 2`) and a `predictions`
+  block (`as_of`, `input_t`, model bundle, per car pit probabilities, rejoin position, undercut threat), and
+  `extra.telemetry` (speed, gear, throttle, brake, DRS, rpm); the ~3 Hz `pos` events carry telemetry too.
+- New test: a recording followed as live and the same recording replayed make identical calls.
+- Kept as is (simplest option): server-sent events instead of a WebSocket (controls are POSTs), snapshots every 3 s
+  of session time plus every leader lap with positions and telemetry at ~3 Hz, instead of a fixed 4 Hz snapshot.

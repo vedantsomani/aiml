@@ -202,7 +202,7 @@ def cmd_shadow_score(a) -> None:
 
 
 def add_commands(sub) -> None:
-    s = sub.add_parser("pitwall", help="follow a race and show the strategy screen in the browser")
+    s = sub.add_parser("pitwall", aliases=["serve"], help="follow a race and show the strategy screen in the browser (alias: serve)")
     s.add_argument("--year", type=int, default=2026)
     s.add_argument("--race", help="archive replay, e.g. 'hungary'")
     s.add_argument("--sprint", action="store_true")

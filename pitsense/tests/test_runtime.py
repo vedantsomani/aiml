@@ -474,3 +474,32 @@ def test_live_recorder_is_restarted_when_it_dies(tmp_path):
         time.sleep(0.05)
     stop.set()
     assert src.recorder_restarts == 1 and Flaky.runs == 2 and "feed gone" in src.recorder_error
+
+
+def test_snapshot_is_versioned_and_preregisters_predictions():
+    d = run_replay(team=TeamConfig(cars=("22",))).latest
+    assert d["schema"] == runtime_mod.SNAPSHOT_SCHEMA
+    p = d["predictions"]
+    assert p["as_of"] == round(d["t"], 3) and "model" in p and set(p["cars"]) == set(d["cars"])
+    assert {"pit_prob_1", "pit_prob_3", "rejoin_if_box_now"} <= set(p["cars"]["22"])
+    assert "telemetry" in d["extra"]
+
+
+def test_serve_is_an_alias_of_pitwall(capsys):
+    p = argparse.ArgumentParser()
+    add_commands(p.add_subparsers(dest="cmd"))
+    assert p.parse_args(["serve", "--speed", "4"]).fn.__name__ == "cmd_pitwall"
+
+
+def test_replay_and_live_follow_make_the_same_calls(tmp_path):
+    path = tmp_path / "rec.jsonl"
+    path.write_text("".join(rec_lines()), encoding="utf-8")
+
+    def calls(src):
+        rt = PitWallRuntime(src, models=False, engineers=[Flipper])
+        rt.start()
+        assert rt.wait(30)
+        return [(round(r["t"], 3), r["action"]) for r in rt.calls()["log"] if r["kind"] == "call"]
+
+    live = calls(FollowSource(path, follow=False, radio=False))
+    assert live and calls(ReplaySource(load_recording(path), 0)) == live
