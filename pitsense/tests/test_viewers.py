@@ -132,6 +132,63 @@ def test_no_token_means_open_and_viewer_cap():
         rt.stop()
 
 
+def test_viewer_cap_holds_when_viewers_connect_at_once():
+    rt = PitWallRuntime(ReplaySource(make_log(), 0), models=False)
+    start, got = threading.Barrier(40), []
+
+    def connect():
+        start.wait()
+        got.append(rt.subscribe(5))
+
+    threads = [threading.Thread(target=connect) for _ in range(40)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert sum(q is not None for q in got) == 5 and len(rt.listeners) == 5
+
+
+def test_a_failing_view_answers_500_and_the_server_goes_on(monkeypatch):
+    rt = make_rt()
+    server = serve(rt, port=0)
+    port = server.server_address[1]
+
+    def broken():
+        raise RuntimeError("broken view")
+
+    monkeypatch.setattr(rt, "health", broken)
+    try:
+        with pytest.raises(urllib.error.HTTPError) as err:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=10)
+        assert err.value.code == 500 and "broken view" in json.loads(err.value.read())["error"]
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/snapshot", timeout=10) as r:
+            assert r.status == 200
+    finally:
+        server.shutdown()
+        rt.stop()
+
+
+def test_refused_posts_are_answered_not_reset():
+    """A POST refused before its body was read (token, path, origin) still gets its answer, every time."""
+    rt = make_rt()
+    server = serve(rt, port=0, token="tok")
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    body = json.dumps({"car": "11", "text": "box now " * 2000}).encode()
+    codes = []
+    try:
+        for path, headers in [("/api/ask", {}), ("/api/nope?token=tok", {}), ("/api/ask?token=tok", {"Origin": "http://evil.example"})] * 40:
+            req = urllib.request.Request(base + path, data=body, method="POST", headers={"Content-Type": "application/json", **headers})
+            try:
+                urllib.request.urlopen(req, timeout=10)
+            except urllib.error.HTTPError as e:
+                e.read()
+                codes.append(e.code)
+    finally:
+        server.shutdown()
+        rt.stop()
+    assert codes == [401, 404, 403] * 40
+
+
 def test_snapshot_lists_teams_for_the_per_viewer_selector():
     rt = make_rt()
     try:

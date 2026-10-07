@@ -9,6 +9,10 @@ snapshot a straight play to lap L gives, and nothing from after L is ever visibl
 Checkpoints are shared through a :class:`ReplayIndex`, which a background pass (``PitWallRuntime(index=True)``)
 fills ahead of the viewer. The timeline marks (``ReplayIndex.marks``) deliberately include things that happen
 later in the race; they are read by the page only, never by an engineer.
+
+A copy shares what never changes during the race (the Context: models, history, priors) and copies shallowly what
+only grows with entries that never change (the models engineer's memo of predictions; deep-copying it took ~1.7 s
+per lap at lap 40), so a checkpoint costs tens of milliseconds in the loop.
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ from ..state import RaceState
 # state kept by the runtime itself (besides state and wall) that a jump must put back
 RUNTIME_ATTRS = (
     "session_info", "calls_log", "alerts_log", "inferred_order", "_feed_positions", "observe_errors",
-    "snapshot_errors", "_last_pub_t", "_last_pub_lap", "_last_calls", "radio", "wall_msgs", "_wall_id",
+    "snapshot_errors", "_decided_t", "_decided_lap", "_sent_t", "_last_calls", "_last_call_info", "changes", "radio", "wall_msgs", "_wall_id",
     "track", "_track_done", "_pos_t", "positions", "_radio_lap", "_radio_list", "_radio_sig", "_seen_alerts",
     "_wall_quali", "n_events", "n_snapshots", "latest", "latest_bytes", "_prev_lap", "_last_alarms",
 )
@@ -46,7 +50,7 @@ class Checkpoint:
     lap: int  # leader lap at this moment
     prev_lap: int  # leader lap before the event that made it ``lap`` (so this is the first event of ``lap``)
     t: float
-    payload: object = field(repr=False, default=None)  # deep copy of (state, wall, runtime attrs)
+    payload: object = field(repr=False, default=None)  # see capture()
 
 
 class ReplayIndex:
@@ -107,17 +111,38 @@ class ReplayIndex:
             return sorted(self.marks.values(), key=lambda m: (m["t"], m["id"]))
 
 
+def copy_memo(wall, ctx=None) -> dict:
+    """A deepcopy memo for ``wall``: its Context becomes ``ctx`` (default: the same one, shared) and the models
+    engineer's memo of predictions is copied shallowly (a pure function of the row: its entries never change)."""
+    memo = {id(wall.ctx): wall.ctx if ctx is None else ctx}
+    rows = getattr(next((e for e in wall.engineers if e.name == "models"), None), "_memo", None)
+    if type(rows) is dict:
+        memo[id(rows)] = dict(rows)
+    return memo
+
+
+def ctx_caches(ctx) -> dict:
+    """Shallow copies of the Context's caches that engineers fill in place (the strategy analysis). Unlike the
+    models and priors they depend on when they were filled, so they belong to the moment a copy is taken."""
+    return {k: dict(v) for k, v in vars(ctx).items() if k.startswith("_") and type(v) is dict}
+
+
 def capture(rt) -> object:
-    """Deep copy of everything a jump must restore. The Context (models, history) is shared, not copied."""
-    memo = {id(rt.wall.ctx): rt.wall.ctx}
+    """Copy of everything a jump must restore: (state, wall, runtime attrs, Context caches)."""
     attrs = {k: getattr(rt, k) for k in RUNTIME_ATTRS}
-    return copy.deepcopy((rt.state, rt.wall, attrs), memo)
+    state, wall, attrs = copy.deepcopy((rt.state, rt.wall, attrs), copy_memo(rt.wall))
+    return state, wall, attrs, ctx_caches(rt.wall.ctx)
 
 
 def restore(rt, payload) -> None:
-    memo = {id(rt.wall.ctx): rt.wall.ctx} if rt.wall is not None else {}
-    state, wall, attrs = copy.deepcopy(payload, memo)
-    rt.state, rt.wall = state, wall
+    """Put a capture back (the capture stays as it is). The engineers get the runtime's own Context (an indexing
+    pass has another), with its caches as they were at the capture: a jump then plays on exactly as a straight run."""
+    state, wall, attrs, caches = payload
+    ctx = rt.wall.ctx if rt.wall is not None else wall.ctx
+    rt.state, rt.wall, attrs = copy.deepcopy((state, wall, attrs), copy_memo(wall, ctx))
+    for k in [k for k, v in vars(ctx).items() if k.startswith("_") and type(v) is dict]:
+        del vars(ctx)[k]
+    vars(ctx).update({k: dict(v) for k, v in caches.items()})
     for k, v in attrs.items():
         setattr(rt, k, v)
 

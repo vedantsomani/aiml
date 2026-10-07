@@ -156,7 +156,7 @@ def test_small_model_trains_and_decodes_deterministically(tmp_path, monkeypatch)
     a = m.generate(prompt, 40)
     assert a == m.generate(prompt, 40)
     # batching with different prompt lengths gives the same text as one at a time
-    assert m.generate(prompt[:1], 40)[0] == a[0] or True  # padding may change float rounding; the API decodes batches of 1 or sorted
+    # padding may change float rounding; the API decodes batches of 1 or sorted
 
 
 def test_voice_loads_and_guards_a_model(tmp_path, monkeypatch):

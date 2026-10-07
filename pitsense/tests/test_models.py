@@ -5,7 +5,6 @@ import pandas as pd
 import pytest
 
 from pitsense.asof import LeakageError
-from pitsense.bench.dataset import decision_rows
 from pitsense.bench.evaluate import RACE_SPAN
 from pitsense.bench.features import FeatureBuilder, feature_columns
 from pitsense.bench.models import BaseRate, NoChange

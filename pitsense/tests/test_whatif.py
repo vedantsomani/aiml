@@ -349,3 +349,33 @@ def test_chart_history_payload_is_small_and_as_of():
     for rows in ch["stints"].values():
         assert rows and all(len(r) == 3 and r[1] <= r[2] for r in rows)
     assert len(json.dumps(ch)) < 30_000
+
+
+# ------------------------------------------------------------------ wet weather
+@pytest.mark.parametrize("text,kind,labels", [
+    ("box now for inters", "whatif", ["Box now for INTERMEDIATE"]),
+    ("what if we pit for intermediates in 2 laps", "whatif", ["Box in 2 laps for INTERMEDIATE"]),
+    ("box for full wets or stay out", "whatif", ["Box now for WET", "Stay out to the end"]),
+    ("what if it rains in 10 minutes", "rain", []),
+    ("if it starts raining should we box for inters", "rain", ["Box now for INTERMEDIATE"]),
+    ("what if the track dries out", "dry", []),
+    ("if it dries should we box for slicks", "dry", ["Box now for SLICKS"]),
+])
+def test_parser_wet_questions(text, kind, labels):
+    q = _p(text)
+    assert q.kind == kind and [o.label() for o in q.options] == labels, (q.kind, q.to_dict())
+
+
+def test_rain_chance_stays_a_fact_and_dry_compounds_stay_dry():
+    assert _p("what is the chance of rain").kind != "rain"
+    assert [o.compound for o in _p("box now for hards").options] == ["HARD"]
+
+
+def test_wet_questions_go_to_the_wet_simulator(race_log):
+    s, w = _run(race_log, until=_cut(race_log))
+    tla = {n: d.tla for n, d in s.drivers.items()}
+    for text in ("box now for inters", "what if it rains in 10 minutes"):
+        r = what_if(w, s, "11", parse_question(text, tla, "11"))
+        assert r["wet"] is True and r["kind"] in ("whatif", "rain")
+        assert r["ok"] or "wet-weather history" in r["why"]  # the synthetic race has no wet history behind it
+    assert "wet" not in what_if(w, s, "11", parse_question("box now for hards", tla, "11"))  # a dry race stays dry

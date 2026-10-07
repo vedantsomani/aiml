@@ -8,3 +8,4 @@ reports/*.parquet
 .claude/settings.local.json
 .claude/worktrees/
 Claude outputs/
+.vscode/

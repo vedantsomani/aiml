@@ -62,8 +62,6 @@ def record_race(session_dir: str, meta_name: str = "") -> dict:
     cols: dict[str, dict[str, list]] = {}
     last_move: dict[str, float] = {}
     notrun: dict[str, tuple[float, int]] = {}
-    alerts_log: list[tuple[float, str, str, str]] = []
-    seen_alert: set[tuple[str, str, float]] = set()
     t_wall = time.time()
     for e in log.events:
         st.apply(e)
@@ -477,7 +475,6 @@ def report(years_tune=(2025,), years_final=(2026,), jobs: int = 3, refresh: bool
 
 
 def cmd_mechanics_eval(a) -> None:
-    from ..config import data_dir
 
     text = report(tuple(a.tune_year), tuple(a.year) if a.year else (), a.jobs, a.refresh, a.budget)
     print(text)

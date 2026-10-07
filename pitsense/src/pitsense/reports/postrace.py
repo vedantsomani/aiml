@@ -18,7 +18,7 @@ from ..events import EventLog
 from ..state import RaceState, replay
 from . import svg
 from .prerace import prerace, session_start, team_config
-from .svg import BAD, COMPOUND_COL, OK, TEAM_COLS, WARN, chip, section, table
+from .svg import BAD, OK, TEAM_COLS, WARN, chip, section, table
 
 BOX_ACTIONS = ("BOX", "PREPARE_BOX", "BOX_IF_SC")
 RADIO_WORDS = {  # what makes a radio message worth showing (weights)

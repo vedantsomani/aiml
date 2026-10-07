@@ -81,10 +81,11 @@ class Call:
     car: str
     action: str  # one of ACTIONS
     compound: str | None = None  # tyre to fit when boxing
-    confidence: float | None = None  # 0..1
+    confidence: float | None = None  # 0..1: the chance the call is right, calibrated on earlier races (pitsense.calibration)
     reasons: tuple[Reason, ...] = ()  # most important first
     plan_a: Plan | None = None
     plan_b: Plan | None = None
+    confidence_raw: float | None = None  # the head's own score before calibration (the simulator's view)
 
 
 @dataclass(frozen=True)
@@ -93,6 +94,7 @@ class TeamConfig:
 
     team: str | None = None
     cars: tuple[str, ...] = ()  # explicit car numbers win over ``team``
+    risk: str = "expected"  # how plans are ranked: expected | protect (the downside) | aggressive (the upside)
 
     def match(self, teams: set[str]) -> str | None:
         """The team meant by ``team``: exact name (any case), else the only name containing it."""

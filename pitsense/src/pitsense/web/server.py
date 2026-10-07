@@ -12,16 +12,21 @@
     GET /api/teamradio     ?car=N&i=K: the K-th real driver radio mp3 of car N (published clips only, audio/mpeg)
     POST /api/whatif       {"car": "16", "stop_lap": 25, "compound": "HARD"}: simulate that plan as of now; expected position,
                            P10-P90 and the difference vs plan A (token and same-origin checks as /api/ask)
+    POST /api/risk         {"risk": "expected"|"protect"|"aggressive"}: how the strategy ranks plans from now on
+    POST /api/ack          {"car": "16", "decision": "accept"|"reject", "reason": "...", "call_t": T?}: the operator's answer to
+                           the car's latest call (or the call logged at T); logged for the post-race review, never fed back
     POST /api/ask          {"car": "16", "text": "what if we box now?"}: answer a what-if or fact question; the Q&A joins the
                            conversation and the answer can be spoken via /api/radio.wav?car=N&i=<reply id>
     POST /api/ask_audio    ?car=N, body = recorded audio (webm/opus, ogg, wav): transcribed on the server, then as /api/ask
 
 The GET endpoints are read-only; the ask POSTs only add a question and its answer to the conversation; the replay
 POSTs move a replay (never a live session). Binds to
-127.0.0.1 unless told otherwise; a POST from a page on another origin is refused.
+127.0.0.1 unless told otherwise; a POST from a page on another origin is refused. A request that fails inside the
+server gets a JSON 500, never a dropped connection; questions are answered one at a time (503 "busy" after a wait).
 
 Many browsers may watch at once: each SSE client has its own thread and a bounded queue (a slow one loses its oldest
-messages, a stalled one is cut after WRITE_TIMEOUT_S), so the publishing loop never waits for a viewer. With a token
+messages, a stalled one is cut after WRITE_TIMEOUT_S), so the publishing loop never waits for a viewer; the viewer
+cap is checked and taken in one step. With a token
 set, every request needs it (``?token=``, ``X-PitSense-Token`` or the cookie the first good page load sets).
 """
 
@@ -29,10 +34,13 @@ from __future__ import annotations
 
 import hmac
 import json
+import logging
 import queue
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+log = logging.getLogger("pitsense.web")
 
 STATIC = Path(__file__).parent
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
@@ -73,6 +81,7 @@ def _handler(rt, token: str | None = None, max_viewers: int = MAX_VIEWERS):
             self._send(b'{"error":"token required: open the URL with ?token=..."}', "application/json", 401)
 
         def _send(self, body: bytes, ctype: str, code: int = 200) -> None:
+            self._responded = True
             self.send_response(code)
             if getattr(self, "_set_cookie", False):
                 self.send_header("Set-Cookie", f"{COOKIE}={token}; Path=/; SameSite=Strict; HttpOnly")
@@ -124,11 +133,13 @@ def _handler(rt, token: str | None = None, max_viewers: int = MAX_VIEWERS):
             return origin is None or urlsplit(origin).netloc == self.headers.get("Host", "")
 
         def _body(self) -> bytes | None:
+            """The request body, None if missing or too large. Read before any answer: a connection closed with the
+            body unread is reset, and the client may lose the answer."""
             n = self.headers.get("Content-Length", "")
-            if not n.isdigit() or int(n) > MAX_BODY:
-                self._json({"ok": False, "error": "missing or too large body"}, 413)
-                return None
-            return self.rfile.read(int(n))
+            if n.isdigit() and int(n) <= MAX_BODY:
+                return self.rfile.read(int(n))
+            self.close_connection = True  # what is left unread is no request
+            return None
 
         def _replay(self, path: str, body: bytes) -> None:
             try:
@@ -148,29 +159,54 @@ def _handler(rt, token: str | None = None, max_viewers: int = MAX_VIEWERS):
             err = out.get("error", "")
             self._json(out, 200 if out.get("ok") else 409 if "disabled" in err else 422)
 
+        def _fail(self, exc: Exception) -> None:
+            """A JSON 500 for an unexpected error, unless a response has started (then only the connection closes)."""
+            log.error("%s %s failed: %s: %s", self.command, self.path.partition("?")[0], type(exc).__name__, exc,
+                      exc_info=exc)
+            self.close_connection = True
+            if not self._responded:
+                try:
+                    self._json({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, 500)
+                except OSError:
+                    pass
+
         def do_POST(self) -> None:  # noqa: N802
             from urllib.parse import parse_qs
 
             path, _, query = self.path.partition("?")
+            self._responded = False
             try:
+                body = self._body()
                 if not self._authorised():
                     return self._deny()
-                if path not in ("/api/ask", "/api/ask_audio", "/api/whatif") and path not in REPLAY_POSTS:
+                if path not in ("/api/ask", "/api/ask_audio", "/api/whatif", "/api/ack", "/api/risk") and path not in REPLAY_POSTS:
                     return self._json({"error": "not found"}, 404)
                 if not self._same_origin():
                     return self._json({"ok": False, "error": "cross-origin request refused"}, 403)
-                body = self._body()
                 if body is None:
-                    return
+                    return self._json({"ok": False, "error": "missing or too large body"}, 413)
                 if path in REPLAY_POSTS:
                     return self._replay(path, body)
+                if path == "/api/risk":
+                    try:
+                        out = rt.set_risk(json.loads(body.decode("utf-8") or "{}").get("risk"))
+                    except (ValueError, AttributeError):
+                        return self._json({"ok": False, "error": "body must be JSON: {risk}"}, 400)
+                    return self._json(out, 200 if out.get("ok") else 422)
+                if path == "/api/ack":
+                    try:
+                        req = json.loads(body.decode("utf-8") or "{}")
+                        out = rt.ack(req.get("car"), req.get("decision"), req.get("reason"), req.get("call_t"))
+                    except (ValueError, AttributeError):
+                        return self._json({"ok": False, "error": "body must be JSON: {car, decision, reason?, call_t?}"}, 400)
+                    return self._json(out, 200 if out.get("ok") else 422)
                 if path == "/api/whatif":
                     try:
                         req = json.loads(body.decode("utf-8") or "{}")
                         out = rt.whatif(str(req.get("car") or ""), req.get("stop_lap"), req.get("compound"))
                     except (ValueError, AttributeError):
                         return self._json({"ok": False, "error": 'body must be JSON: {car, stop_lap, compound}'}, 400)
-                    return self._json(out, 200 if out.get("ok") else 422)
+                    return self._json(out, 200 if out.get("ok") else 503 if out.get("busy") else 422)
                 if path == "/api/ask":
                     try:
                         req = json.loads(body.decode("utf-8") or "{}")
@@ -185,10 +221,11 @@ def _handler(rt, token: str | None = None, max_viewers: int = MAX_VIEWERS):
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
             except Exception as exc:  # the loop must never be hurt by a bad question
-                self._json({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, 500)
+                self._fail(exc)
 
         def do_GET(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
+            self._responded = False
             try:
                 if not self._authorised():
                     return self._deny()
@@ -215,19 +252,22 @@ def _handler(rt, token: str | None = None, max_viewers: int = MAX_VIEWERS):
                     self._json({"error": "not found"}, 404)
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
+            except Exception as exc:  # a failing view answers 500 instead of dropping the connection
+                self._fail(exc)
 
         def _stream(self) -> None:
-            if len(rt.listeners) >= max_viewers:
+            q = rt.subscribe(max_viewers)  # the cap is checked and the place taken in one step
+            if q is None:
                 return self._json({"error": "too many viewers"}, 503)
-            self.connection.settimeout(WRITE_TIMEOUT_S)  # a write that blocks this long means the client is gone or stuck
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Connection", "close")
-            self.end_headers()
-            self.close_connection = True
-            q = rt.subscribe()
             try:
+                self.connection.settimeout(WRITE_TIMEOUT_S)  # a write that blocks this long means the client is gone or stuck
+                self._responded = True
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.close_connection = True
                 self.wfile.write(b"retry: 2000\nevent: snapshot\ndata: " + rt.latest_bytes + b"\n\n")
                 self.wfile.flush()
                 idle = 0

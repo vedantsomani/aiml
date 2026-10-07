@@ -53,6 +53,14 @@ localStorage, "no team" = pins only). It only changes what that screen highlight
 server's `--team` is just the default and nothing on the server changes, so a driver coach, a strategist
 and a phone can each follow a different car.
 
+`--risk expected|protect|aggressive` sets how the strategy ranks plans for your cars: best average result
+(default), smallest downside (protecting a position or points) or biggest upside (chasing places). The risk
+selector in the header changes it while running (`POST /api/risk`), for every screen; the plans recompute at once.
+
+Replays decide on the live cadence (every 3 s of session time and every leader lap) at any `--speed`, so a fast
+replay logs the calls the live pit wall would have made; only the dashboard updates less often. `--coarse` decides
+only when the dashboard updates: faster at high speed, but its calls can differ from live.
+
 ## 4b. Phone, tablet and several viewers
 
 - Phone (under 700 px): one section at a time, switched by the tab bar at the bottom (Tower, Map,
@@ -74,6 +82,7 @@ and a phone can each follow a different car.
   with 0 clients vs 1146/1073 ms with 5. The spread between identical runs is as large as the effect, so
   clients cost roughly 5-15% on this single-core-bound loop (the GIL is shared with the JSON writers).
 - The token is a shared secret over plain http: fine for a home or garage network, not for the internet.
+  Put it in the `PITSENSE_TOKEN` environment variable instead of `--token` to keep it out of the process list.
 
 ## 5. The screen
 
@@ -120,7 +129,9 @@ Today the head of strategy returns NO_CALL, so cards show NO CALL until it ships
 | Endpoint | Content |
 |---|---|
 | `GET /api/snapshot` | latest `Snapshot` (`pitwall/types.py`) plus an `extra` block: mode, speed, inferred_order, model bundle, weather, team colours, recent race control |
-| `GET /api/calls` | `{"current": [...], "log": [...]}`: calls now, and every change since start (last 500) |
+| `GET /api/calls` | `{"current": [...], "log": [...], "acks": [...]}`: calls now, every change since start (last 500, each with `change`: from / to / why), and the operator's answers |
+| `POST /api/risk` | `{"risk": "expected" or "protect" or "aggressive"}`: how plans are ranked from now on |
+| `POST /api/ack` | `{"car": "16", "decision": "accept" or "reject", "reason": "...", "call_t": T?}`: the operator's answer to the car's latest call (or the one logged at `T`); logged for the review, never fed back to the engineers |
 | `GET /api/alerts` | `{"active": [...], "log": [...]}` |
 | `GET /api/health` | status, mode, events, snapshots, last-event age, snapshot latency (p50, max), errors, call-log path |
 | `GET /api/stream` | server-sent events: `snapshot` (the snapshot JSON), `pos` (car positions, about 3 Hz on the wall clock at any speed) and `status` |
@@ -189,11 +200,19 @@ Reply: `{ok, car, tla, answer, source, intent, whatif, audio, you, reply, ms}` (
 cross-origin POST, 413 body over 8 MB, 422 nothing heard, 503 no transcriber.
 
 **Parsing** (`whatif.parse_question`, regexes first, then the voice's free-form router `composer.free_kind`):
-what-ifs are *box now / in N laps / on lap L / for SOFT, MEDIUM, HARD*, two options separated by "or" /
+what-ifs are *box now / in N laps / on lap L / for SOFT, MEDIUM, HARD (or INTERS, WETS, SLICKS)*, *what if it rains
+/ dries out*, two options separated by "or" /
 "versus", *stay out to the end*, *safety car or VSC now / next lap / in N laps* and any of them *against a
 rival* (TLA, number, surname, "the car ahead / behind"). Fact questions are gap (ahead, behind or a car),
 tyre age, pit window, plan B, why, chance of a safety car, and everything else goes to the voice's free-form
 answer (rejoin position, pit loss, weather, laps to go, penalty ...).
+
+**In the wet** (wet running now, or the question names inters, wets or slicks, or rain / drying), the question
+goes to the wet simulator (`whatif.what_if_wet`, the strategy engineer's `wetsim`): tyre-class switches for the car
+against its best plan, on the rain model's futures or forced ones ("rain": a shower within 4 laps; "dry": it dries
+out). It models the car's own race time, not the field, so the answer is in seconds over the next laps (up to 40)
+and the chance it is better, never positions. It needs the circuit's dry lap and wet laps from past races
+(`WetModel.available`), and says so when it has none. The dashboard what-if takes INTERMEDIATE and WET too.
 
 **What-if engine** (`whatif.what_if`, `src/pitsense/whatif.py`). It builds the strategy engineer's field and
 the same 288 seeded futures (`analysis.build_field`, `Draws`, `simulate_field`) and scores the asked plans
@@ -276,6 +295,20 @@ It replays the finished race for the real stops (red-flag stops excluded) and re
 precision (a BOX, PREPARE_BOX or BOX_IF_SC call from lap L is right if that car's real in-lap is within
 L-k..L+k), STAY_OUT accuracy (no stop in L..L+k), and stop recall (real stops that had a box call
 within +-k laps). NO_CALL is not scored. `--cars 16 44` limits it, `--json` for machines.
+
+**The operator.** Each focus car's call in the call bar has accept (✓) and reject (✗, with an optional reason)
+buttons; the answer stands while the call (action and tyre) is the same. Answers go to the call log as
+`{"kind":"ack", ...}` records and never change what the engineers decide. `shadow-score` reports them under
+`operator`: for accepted and for rejected calls, how many turned out right (a rejected call that was right is a
+call the wall got right and the team overruled). When a car's call changes, its record carries `change`
+(`from`, `to`, `why`: the reasons that are new, and a track status change), shown under the call in the call bar.
+
+**Confidence** is calibrated: `pitsense calibrate` replays the head on every race of the given years, fits per
+action how often calls with a given raw score were right (BOX: a stop in L..L+2; PREPARE_BOX: L..L+3; STAY_OUT:
+no stop in L..L+2), and stores one fit per training cutoff in `data/models/call_calibration.json`. A race uses the
+latest fit trained only on races that ended before it started; without one the raw score is used. Calls carry both
+`confidence` (calibrated) and `confidence_raw`. Refit with `pitsense calibrate --refresh` after the head or the
+simulator changes.
 
 ## 8. Performance (this machine, 2026 Hungarian GP, 73,835 events, 70 laps)
 

@@ -22,7 +22,6 @@ leave-one-race-out predictions); 2026 is scored once.
 
 from __future__ import annotations
 
-import math
 import pickle
 import statistics
 import time

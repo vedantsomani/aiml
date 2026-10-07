@@ -91,8 +91,8 @@ def test_dependency_order_and_errors():
 FUTURE = {"labels", "evaluate", "leakcheck", "dataset"}  # modules that read or score the future
 
 
-# runtime.py feeds events to the wall (it has to read the log); everything else must not.
-FEEDERS = {"runtime.py"}
+# the runtime, its sources and its command line feed events to the wall (they read the log); nothing else may.
+FEEDERS = {"runtime.py", "sources.py", "commands.py"}
 
 
 def test_pitwall_code_never_imports_the_future():

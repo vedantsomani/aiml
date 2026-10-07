@@ -18,6 +18,7 @@ track status changes, so a call is a function of that moment and the call before
 
 from __future__ import annotations
 
+import dataclasses
 import math
 
 from ..engineer import Engineer
@@ -58,6 +59,48 @@ def _gap(a, A, lo: int, hi: int) -> float | None:
     """Places lost by stopping within offsets lo..hi laps from now instead of following plan A (None: no such plan)."""
     u = [r.util for r in a.ranked if r.stops and r.first_offset is not None and lo <= r.first_offset <= hi]
     return min(u) - A.util if u else None
+
+
+DOUBLE_STACK_S = 3.0  # what the second car of a double stack loses waiting for the first (stationary time and release)
+DOUBLE_STACK_KEEP = 0.5  # places: the second car still double-stacks when waiting a lap costs this much or more
+
+
+def double_stack(calls: list, drivers: dict, track_status: str | None, analyses: dict) -> list:
+    """Teammates both called to BOX this lap. Under green flag the car behind waits a lap (PREPARE_BOX) unless the
+    simulator says waiting costs it ``DOUBLE_STACK_KEEP`` places or more; under SC / VSC, where stacking is usual,
+    both box and the second car is told the queue cost. Other calls pass through unchanged."""
+    box = [c for c in calls if c.action == "BOX" and c.car in drivers]
+    by_team: dict = {}
+    for c in box:
+        by_team.setdefault(drivers[c.car].team, []).append(c)
+    out = {c.car: c for c in calls}
+    for team, cs in by_team.items():
+        if not team or len(cs) < 2:
+            continue
+        first, second = sorted(cs, key=lambda c: drivers[c.car].position or 99)[:2]
+        mate = drivers[first.car].tla or first.car
+        if track_status not in ("1", "2"):  # neutralised: stack, and say what it costs
+            out[second.car] = dataclasses.replace(second, reasons=(Reason(
+                "double_stack", f"double stack behind {mate}: about {DOUBLE_STACK_S:.0f} s waiting in the box", DOUBLE_STACK_S),
+                *second.reasons))
+            continue
+        a = analyses.get(second.car)
+        ranked = getattr(a, "ranked", None) or []
+        now = next((r for r in ranked if r.first_offset == 0), None)
+        nxt = next((r for r in ranked if r.first_offset == 1), None)
+        if now is None or nxt is None:
+            continue
+        cost = float(nxt.util - now.util)  # places lost by waiting a lap (negative: waiting is better anyway)
+        if cost >= DOUBLE_STACK_KEEP:
+            out[second.car] = dataclasses.replace(second, reasons=(Reason(
+                "double_stack", f"double stack behind {mate}: waiting a lap would cost {cost:.1f} places", round(cost, 2)),
+                *second.reasons))
+            continue
+        comp = nxt.stops[0][1] if nxt.stops else second.compound
+        out[second.car] = dataclasses.replace(second, action="PREPARE_BOX", compound=comp, reasons=(Reason(
+            "double_stack", f"{mate} boxes this lap: box next lap instead of queueing about {DOUBLE_STACK_S:.0f} s "
+            f"(waiting costs {max(cost, 0.0):.1f} places)", round(cost, 2)), *second.reasons))
+    return [out[c.car] for c in calls]
 
 
 SC_ALERT_P = 0.08  # the safetycar engineer's alert level (pitwall/engineers/safetycar.py ALERT_P)
@@ -169,7 +212,6 @@ def decide(a, prev_target: int | None, *, pit_open: bool = True, sc_phase: str =
 
     ``ctl`` is the car's memory between calls (a plain dict the caller keeps); ``ctl["notes"]`` returns what was changed.
     """
-    S = SETTINGS
     ctl = {} if ctl is None else ctl
     key = (a.anchor, sc_phase, pit_open, stops_done, prev_target, a.ranked[0].util if getattr(a, "ranked", None) else None)
     if ctl.get("memo", (None,))[0] == key:  # asked again with nothing new (same lap, status, plans): same answer
@@ -257,6 +299,17 @@ class HeadOfStrategy(Engineer):
         self._ctl: dict[str, dict] = {}  # car -> call memory (compound kept, BOX episode, stops seen)
 
     def calls(self, state, view):
+        """The calls, their confidence calibrated on races that ended before this one (raw score kept)."""
+        from ... import calibration
+
+        if "_call_cal" not in self.__dict__:
+            self._call_cal = calibration.for_race(self.ctx.race_start_utc)
+        calls = double_stack(self._raw_calls(state, view), state.drivers, state.track_status,
+                             get_analysis(self.ctx, self.memory, state, view))
+        return [dataclasses.replace(c, confidence=calibration.apply(self._call_cal, c.action, c.confidence), confidence_raw=c.confidence)
+                for c in calls]
+
+    def _raw_calls(self, state, view):
         cars = [n for n in focus_cars(self.ctx, state) if state.drivers.get(n) is not None and state.drivers[n].running]
         res = get_analysis(self.ctx, self.memory, state, view)
         out = []

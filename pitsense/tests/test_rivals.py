@@ -3,7 +3,6 @@
 import math
 from datetime import datetime, timezone
 
-import pandas as pd
 import pytest
 
 from pitsense.asof import RaceSummary
@@ -16,7 +15,6 @@ from pitsense.pitwall.engineers.rules import RulesEngineer
 from pitsense.pitwall.engineers.tyre import TyreEngineer
 from pitsense.state import RaceState, replay
 
-from .conftest import make_log
 
 T0 = datetime(2026, 3, 1, tzinfo=timezone.utc)
 
@@ -123,7 +121,7 @@ class _Final:
 
 
 def test_undercut_label_needs_chaser_first_and_ahead_after_both_stop():
-    pos = {("B", 12): 1, ("A", 12): 2}  # chaser B is ahead of A after the stops (lap 10 + 3 -> 13 missing, 12 used)
+    # chaser B is ahead of A after the stops (lap 10 + 3 -> 13 missing, 12 used)
     race = _Race(_Final([("B", 8), ("A", 9)], {("B", 12): 1, ("A", 12): 2}))
     assert race.over("B", "A", 6) == (1.0, 1.0)
     assert race.over("A", "B", 6) == (0.0, 0.0)  # A stops after B: not first

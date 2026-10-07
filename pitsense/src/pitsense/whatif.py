@@ -41,7 +41,7 @@ class Spec:
     kind: str  # "now" | "in" | "lap" | "stay" | "plan" (keep the current plan: wait)
     laps: int | None = None  # "in": laps from now (0 = this lap)
     lap: int | None = None  # "lap": absolute in-lap
-    compound: str | None = None  # SOFT | MEDIUM | HARD
+    compound: str | None = None  # SOFT | MEDIUM | HARD | INTERMEDIATE | WET
 
     def label(self) -> str:
         c = f" for {self.compound}" if self.compound else ""
@@ -59,7 +59,7 @@ class Spec:
 @dataclass(frozen=True)
 class Question:
     text: str
-    kind: str  # "whatif" | "sc" | "fact"
+    kind: str  # "whatif" | "sc" | "rain" (a shower starts soon) | "dry" (the track dries out) | "fact"
     options: tuple[Spec, ...] = ()
     sc_in: int = 0  # "sc": laps until the neutralisation starts (0 = this lap)
     vsc: bool = False
@@ -75,7 +75,14 @@ class Question:
 
 _WORDNUM = {w: i for i, w in enumerate(
     "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split())}
-_COMP = {"soft": "SOFT", "softs": "SOFT", "medium": "MEDIUM", "mediums": "MEDIUM", "mediam": "MEDIUM", "hard": "HARD", "hards": "HARD"}
+_COMP = {"soft": "SOFT", "softs": "SOFT", "medium": "MEDIUM", "mediums": "MEDIUM", "mediam": "MEDIUM", "hard": "HARD", "hards": "HARD",
+         "inter": "INTERMEDIATE", "inters": "INTERMEDIATE", "intermediate": "INTERMEDIATE", "intermediates": "INTERMEDIATE",
+         "wets": "WET", "full wet": "WET", "full wets": "WET", "extreme wet": "WET", "extreme wets": "WET", "wet tyres": "WET",
+         "wet tires": "WET", "slick": "SLICKS", "slicks": "SLICKS"}
+WET = ("INTERMEDIATE", "WET")
+WET_SIM = (*WET, "SLICKS")  # tyre names only the wet simulator answers ("SLICKS": any dry compound)
+_RAIN = r"\b(?:rain|rains|raining|rained|shower|showers|downpour|drizzle|gets wet|goes wet)\b"
+_DRYING = r"\b(?:dries|dry out|dries out|drying|dry line|stops raining|rain stops|stop raining|rain eases)\b"
 _COLOUR = {"red": "SOFT", "reds": "SOFT", "yellow": "MEDIUM", "yellows": "MEDIUM", "white": "HARD", "whites": "HARD"}
 _STOP_WORD = r"(?:box|boxing|boxed|pit|pits|pitting|pitstop|stop|stopping|come in|comes in|bring (?:him|her|us|it|the car) in|dive in|undercut|overcut|switch to|go onto|go on to|fit|change (?:the )?tyres?)"
 _STAY = (r"stay(?:ing)? out|stay on (?:the )?(?:track|these|this|current|old|same)|no (?:more )?(?:pit ?)?stops?|never (?:box|pit)|"
@@ -98,7 +105,8 @@ def _norm(text: str) -> str:
 
 
 def _compound(q: str) -> str | None:
-    m = re.search(r"\b(soft|softs|medium|mediums|mediam|hard|hards)\b", q)
+    m = re.search(r"\b(soft|softs|medium|mediums|mediam|hard|hards|intermediates?|inters?|(?:full |extreme )?wets|(?:full |extreme )wet"
+                  r"|wet tyres|wet tires|slicks?)\b", q)
     if m:
         return _COMP[m.group(1)]
     m = re.search(r"\b(reds?|yellows?|whites?)\s+(?:tyres?|tires?|compound|set|ones?)\b", q)
@@ -176,6 +184,11 @@ def parse_question(text: str, tla_of: dict[str, str] | None = None, car: str | N
         spec = _spec(re.sub(_SC, " ", q)) if box and not re.search(r"\b(?:what if|if)\s+(?:a |the )?(?:" + _SC + ")", q) else None
         return Question(raw, "sc", options=(spec,) if spec and box else (), sc_in=k,
                         vsc=bool(re.search(r"\bvsc\b|v s c|virtual", q)), rival=rival, rival_ref=ref)
+    chance = re.search(r"\b(?:chance|probab\w*|likely|likelihood|odds|forecast|radar)\b", q)
+    weather = "dry" if re.search(_DRYING, q) else "rain" if re.search(_RAIN, q) else None
+    if weather and not chance and (iff or box):  # "what if it rains in 10 minutes", "if it dries, box for slicks?"
+        spec = _spec(re.sub(_RAIN + "|" + _DRYING, " ", q)) if box else None
+        return Question(raw, weather, options=(spec,) if spec else (), rival=rival, rival_ref=ref)
     if re.search(r"^(?:why|what is the reason|what are the reasons|explain)\b", q):
         return Question(raw, "fact", fact="why")
     if re.search(_STAY, q) and not re.search(r"\bwhen\b", q):
@@ -377,6 +390,8 @@ def what_if(wall, state, car: str, q: Question, *, S: int = N_SIMS) -> dict:
     t0 = time.perf_counter()
     d = state.drivers.get(car)
     base = {"car": car, "tla": d.tla if d else car, "t": round(state.t, 1), "question": q.text, "parsed": q.to_dict(), "kind": q.kind}
+    if d is not None and (q.kind in ("rain", "dry") or any(o.compound in WET_SIM for o in q.options) or _wet_now(wall, state, d)):
+        return what_if_wet(wall, state, car, q)
     fld, why = _field_for(wall, state, car, S)
     if fld is None:
         return {**base, "ok": False, "why": why}
@@ -530,6 +545,123 @@ def what_if(wall, state, car: str, q: Question, *, S: int = N_SIMS) -> dict:
     res["sim_ms"] = round(fld.ms)
     res["answer"] = compose(res)
     return res
+
+
+# ============================================================================ the wet simulator
+def _wet_now(wall, state, d) -> bool:
+    """Wet running now (as the planner reads it): the dry simulator cannot answer, the wet one does."""
+    wx = wall.view(state).race("weather")
+    return bool(wx.get("wet_running")) or (wx.get("rainfall") or 0) > 0 or d.compound in WET
+
+
+def _wet_cls(compound: str | None) -> int | None:
+    """Wet simulator tyre class of a compound name: 0 slicks, 1 intermediates, 2 full wets."""
+    if compound is None:
+        return None
+    return 1 if compound == "INTERMEDIATE" else 2 if compound == "WET" else 0
+
+
+def what_if_wet(wall, state, car: str, q: Question) -> dict:
+    """A what-if on the wet simulator: tyre-class switches (slicks / inters / wets) for ``car`` against its best plan,
+    on the futures of the rain model, or forced ones for "rain" (a shower within 4 laps) and "dry" (it dries out).
+    It models the car's own race time, not the field: answers are in seconds, never positions."""
+    from .pitwall.engineers.strategy import wetobs, wetsim
+
+    t0 = time.perf_counter()
+    d = state.drivers[car]
+    base = {"car": car, "tla": d.tla, "t": round(state.t, 1), "question": q.text, "parsed": q.to_dict(), "kind": q.kind,
+            "wet": True}
+    if not d.running:
+        return {**base, "ok": False, "why": f"car {car} is out of the race"}
+    if d.laps < 2:
+        return {**base, "ok": False, "why": "too early: no laps to read pace from"}
+    ctx = wall.ctx
+    model = wetobs.model_for(ctx)
+    if not model.available:  # as the wet head: it needs this circuit's dry lap and wet laps from past races
+        return {**base, "ok": False, "why": "no wet-weather history for this circuit yet, so the wet simulator cannot run"}
+    inp, ob = wetobs.build_input(state, wall.view(state), ctx, model, car)
+    A, H = inp.A, inp.H
+    if inp.total - A < 1:
+        return {**base, "ok": False, "why": "race is over"}
+    S = wetsim.WSET["S"]
+    seed = wetobs.seed_for(ctx, car, A, "whatif")
+    force = q.kind if q.kind in ("rain", "dry") else None
+    w, _ = wetsim.simulate(model, inp, S, seed, force=force)
+    cands = wetsim.candidates(inp.c0, H)
+    tot = wetsim.evaluate(model, inp, w, cands)
+    if force:  # plan A: the best plan on the normal futures, played into the forced ones
+        w0, _ = wetsim.simulate(model, inp, S, seed)
+        a_plan = cands[int(np.argmin(wetsim.evaluate(model, inp, w0, cands).mean(1)))]
+    else:
+        a_plan = cands[int(np.argmin(tot.mean(1)))]
+    base.update(lap=A + 1, total=inp.total, position=d.position, compound=d.compound, tyre_age=d.tyre_age)
+
+    def plans_for(sp: Spec) -> list[tuple]:
+        if sp.kind == "stay":
+            return [()]
+        if sp.kind == "plan":
+            return [a_plan]
+        o = 0 if sp.kind == "now" else sp.laps if sp.kind == "in" else max(0, (sp.lap or A + 1) - (A + 1))
+        if o >= H:
+            return []
+        cls = _wet_cls(sp.compound)
+        return [((o, c),) for c in ((cls,) if cls is not None else (0, 1, 2)) if c != inp.c0 or cls is not None]
+
+    groups: list[tuple[str, list[tuple]]] = [(sp.label(), plans_for(sp)) for sp in q.options[:2]]
+    groups = [(lab, ps) for lab, ps in groups if ps]
+    if not groups:  # "what if it rains?": the best reaction on those futures
+        groups = [("If it " + ("rains" if force == "rain" else "dries out") if force else "Best plan", list(cands))]
+    allp = list(dict.fromkeys([p for _, ps in groups for p in ps] + [a_plan]))
+    t = wetsim.evaluate(model, inp, w, allp)
+    m = t.mean(1)
+
+    def txt(p: tuple) -> str:
+        return ", ".join(f"L{A + 1 + o} {wetsim.CLASS_NAMES[c]}" for o, c in p) if p else "no stop"
+
+    def summarize(i: int, label: str) -> dict:
+        return {"label": label, "plan": txt(allp[i]), "stops": [[A + 1 + o, wetsim.CLASS_NAMES[c]] for o, c in allp[i]],
+                "exp_pos": None, "race_time_s": round(float(m[i] - m.min()), 1)}
+
+    chosen = [min((allp.index(p) for p in ps), key=lambda i: m[i]) for _, ps in groups]
+    vi = chosen[1] if len(chosen) == 2 else allp.index(a_plan)
+    res = {**base, "ok": True, "scenario": summarize(chosen[0], groups[0][0]), "legal": True, "n_sims": S, "notes": []}
+    vlab = groups[1][0] if len(chosen) == 2 else ("Stay on plan A" if force else "Plan A") + f" ({txt(allp[vi])})"
+    res["versus"] = summarize(vi, vlab)
+    ts, tv = t[chosen[0]], t[vi]
+    res["delta_time_s"] = round(float(ts.mean() - tv.mean()), 1)  # negative: the scenario is quicker
+    res["p_gain"] = round(float((ts < tv - 0.5).mean()), 3)
+    res["p_loss"] = round(float((ts > tv + 0.5).mean()), 3)
+    res["delta_pos"] = None
+    res["horizon_laps"] = H
+    inter_minus_slick = float((model.inter(np.array([inp.w0])) - inp.w0)[0] * inp.ref_s)
+    reasons = [f"over the next {H} laps {abs(res['delta_time_s']):.0f} s {'quicker' if res['delta_time_s'] < 0 else 'slower'} than "
+               + _low(vlab.split(' (')[0]),
+               f"inters are {abs(inter_minus_slick):.1f} s a lap {'faster' if inter_minus_slick < 0 else 'slower'} than slicks now",
+               f"rain in the next 10 minutes is {_pct(inp.p10)} percent likely" + (" (forced in this scenario)" if force else ""),
+               f"a stop costs about {inp.loss_green:.0f} s"]
+    if q.options and q.options[0].compound in WET and inp.c0 == 0 and not force and inp.p10 < 0.2 and inp.w0 < 0.05:
+        res["notes"].append("the track is dry now: wet tyres only pay if it rains")
+    res["reasons"] = reasons
+    res["ms"] = round((time.perf_counter() - t0) * 1000)
+    res["answer"] = compose_wet(res)
+    return res
+
+
+def compose_wet(r: dict) -> str:
+    s, v, tla = r["scenario"], r["versus"], r["tla"]
+    dt, n = r["delta_time_s"], r["horizon_laps"]
+    weather = {"rain": "If it rains", "dry": "If it dries out"}.get(r["kind"])
+    if s["plan"] == v["plan"]:
+        out = [f"{weather + ', p' if weather else 'P'}lan A still holds for {tla}: {s['plan']}."]
+    else:
+        lead = f"{weather}, the best plan for {tla} is {s['plan']}" if weather and s["label"].startswith("If it") else \
+            f"{s['label']} for {tla}, {s['plan']}"
+        out = [f"{lead}: {abs(dt):.0f} seconds {'quicker' if dt < 0 else 'slower'} over the next {n} laps than "
+               f"{_low(v['label'])}.",
+               f"It is better in {_pct(r['p_gain'])} percent of futures and worse in {_pct(r['p_loss'])} percent."]
+    tail = r["notes"][0] if r["notes"] else r["reasons"][1]
+    out.append(tail[0].upper() + tail[1:] + ".")
+    return " ".join(out)
 
 
 # ============================================================================ the words

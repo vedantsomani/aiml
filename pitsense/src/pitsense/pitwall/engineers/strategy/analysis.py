@@ -27,6 +27,7 @@ CIDX = {c: i for i, c in enumerate(DRY)}
 
 # search and decision settings (tuned on 2025; see docs/engineers/strategy.md)
 SETTINGS = {
+    "rival_cover": True,  # the car ahead may cover our undercut (its team's learnt cover rate); see rival_cover()
     "S": 288,  # simulated futures
     "S1": 96,  # futures used to screen the candidate plans
     "S_B": 160,  # futures in the safety-car scenario
@@ -104,7 +105,7 @@ class PlanResult:
     pos_sd: float
     first_offset: int | None  # laps from the next lap to the first stop (0 = this lap)
     pos: np.ndarray | None = None  # per-simulation finishing positions (not exported)
-    util: float = 0.0  # expected position plus a small price on race time: breaks ties between equal positions
+    util: float = 0.0  # ranking score: position plus a small price on race time, averaged as TeamConfig.risk says
     util_s: np.ndarray | None = None  # per-simulation utility
 
     def to_plan(self, name: str, trigger: str | None = None) -> Plan:
@@ -270,6 +271,7 @@ def build_field(state, view, memory, ctx, pri: Priors, A: int) -> tuple[FieldIn,
         pp3 = pr[1] if pr[1] is not None else _num(rv.get("pit_prob_3"), 0.15)
         pp5 = _num(rv.get("pit_prob_5"), 0.25)
         F.pp[i] = (pp1, max(pp1, pp3), max(pp1, pp3, pp5))
+        info.setdefault("cover", {})[n] = _num(rv.get("team_cover_rate"), 0.15)  # learnt per team (rivals engineer)
         ps = [_num(md.get(k)) for k in ("p_stop_le_1", "p_stop_le_2", "p_stop_le_3", "p_stop_le_5", "p_stop_le_8", "laps_to_stop_med")]
         info.setdefault("ps", {})[n] = tuple(ps) if None not in ps else None
         F.must[i] = bool(rl.get("must_stop"))
@@ -357,7 +359,6 @@ def candidates(F: FieldIn, c: int, info: dict, number: str) -> list[tuple]:
             return False
         if not plan and stint_left is not None and stint_left < F.R:
             return False
-        prev = laps[0] if plan else None
         bounds = laps + [total]
         for k, (l, cj) in enumerate(plan):
             nxt = bounds[k + 1]
@@ -451,10 +452,45 @@ def _prior_pen(F: FieldIn, c: int, plan: tuple) -> float:
     return lam * min(15.0, max(0.0, F.R - o))
 
 
-def _result(plan: tuple, pos: np.ndarray, time: np.ndarray, soft: np.ndarray, A: int, tref: float, pen: float = 0.0) -> PlanResult:
+RISK_TAIL = 0.25  # share of simulations "protect" / "aggressive" rank on: the worst / best quarter
+
+
+def risk_score(u: np.ndarray, risk: str = "expected") -> float:
+    """What plans are ranked on (lower is better, in places): the mean utility; for ``protect`` the mean of the worst
+    quarter of outcomes (keep the downside small), for ``aggressive`` the mean of the best quarter (chase the upside)."""
+    if risk not in ("protect", "aggressive") or len(u) < 4:
+        return float(u.mean())
+    k = max(1, int(round(len(u) * RISK_TAIL)))
+    s = np.sort(u)
+    return float(s[-k:].mean() if risk == "protect" else s[:k].mean())
+
+
+def rival_cover(F: FieldIn, run: FieldRun, c: int, stop: np.ndarray, pos: np.ndarray, soft: np.ndarray,
+                tm: np.ndarray, rates: dict, seed: int) -> tuple[np.ndarray, np.ndarray]:
+    """Rivals that react: in a future where our earlier stop (2+ laps before the car ahead's own) puts us ahead of
+    it, that car covers with its team's learnt rate and stays ahead. The car ahead is the one directly in front now.
+    Positions and the soft position go one place back where it covers. Seeded: the same futures give the same answer."""
+    S = pos.shape[1]
+    ahead = [j for j in range(F.C) if j != c and F.x0[j] < F.x0[c]]
+    if not ahead:
+        return pos, soft
+    a = max(ahead, key=lambda j: F.x0[j])
+    rate = float(rates.get(F.cars[a]) or 0.0)
+    if rate <= 0:
+        return pos, soft
+    a_stop = run.stop[:S, a, 0]  # the car ahead's own first stop in each future
+    ours = stop[:, :S, 0]
+    undercut = (ours < NOSTOP) & (ours <= a_stop[None, :] - 2) & (tm < run.final[:S, a][None, :])
+    covers = np.random.default_rng(seed).random(S) < rate  # the same draw for every plan: paired comparison
+    hit = undercut & covers[None, :]
+    return pos + hit, soft + hit
+
+
+def _result(plan: tuple, pos: np.ndarray, time: np.ndarray, soft: np.ndarray, A: int, tref: float, pen: float = 0.0,
+            risk: str = "expected") -> PlanResult:
     u = soft + SETTINGS["w_time"] * (time - tref) + pen
     return PlanResult(tuple((int(l), DRY[cj]) for l, cj in plan), float(pos.mean()), float(_points(pos).mean()),
-                      float(pos.std()), (plan[0][0] - (A + 1)) if plan else None, pos, float(u.mean()), u)
+                      float(pos.std()), (plan[0][0] - (A + 1)) if plan else None, pos, risk_score(u, risk), u)
 
 
 # --------------------------------------------------------------------------- one focus car
@@ -494,8 +530,12 @@ def analyse_focus(F: FieldIn, info: dict, run: FieldRun, D: Draws, number: str, 
     sub = [plans[i] for i in chosen]
     stop, comp = _arrays(sub, D.S)
     pos, time, soft = evaluate_plans(F, D, run, c, stop, comp, D.S)
+    if SETTINGS["rival_cover"]:
+        pos, soft = rival_cover(F, run, c, stop, pos, soft, time, info.get("cover", {}),
+                                seed_for(ctx, number, A, "cover") if ctx is not None else A)
     tref = float(time.mean())
-    res = [_result(p, pos[i], time[i], soft[i], A, tref, _prior_pen(F, c, p)) for i, p in enumerate(sub)]
+    risk = getattr(getattr(ctx, "team", None), "risk", "expected")
+    res = [_result(p, pos[i], time[i], soft[i], A, tref, _prior_pen(F, c, p), risk) for i, p in enumerate(sub)]
     out.ranked = sorted(res, key=lambda r: (r.util, r.exp_pos))
     out.plan_a = out.ranked[0]
     now = [r for r in out.ranked if r.first_offset == 0]

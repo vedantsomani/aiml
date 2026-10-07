@@ -22,7 +22,7 @@ used to tune any component.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import provenance
@@ -67,7 +67,7 @@ def holdout_audit(test_year: int = 2026) -> list[dict]:
 
     t0 = pd.Timestamp("2025-03-01", tz="UTC")
     df = pd.DataFrame({"race_id": [f"r{i}" for i in range(6)], "year": [2025] * 3 + [test_year] * 3,
-                       "start_utc": [t0 + pd.Timedelta(days=14 * i) for i in range(6)]})
+                       "start_utc": [t0 + pd.Timedelta(14 * i, unit="D") for i in range(6)]})
     ok = all(tr.start_utc.max() + RACE_SPAN < te.start_utc.min() and (tr.year < test_year).sum() >= 3
              for _, tr, te in _splits(df, test_year, 1))
     add("benchmark models (all tasks)", "races that ended before each test race", "automatic", ok,
@@ -209,7 +209,7 @@ def assemble(srcs: dict, test_year: int = 2026) -> dict:
     sources = {c: prov(c) for c in FILES if srcs.get(c)}
     hashes = {(p or {}).get("data", {}).get("manifest_sha256") for p in sources.values() if p}
     cfgs = {(p or {}).get("config", {}).get("hash") for p in sources.values() if p}
-    return {"generated_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"), "test_year": test_year,
+    return {"generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "test_year": test_year,
             "current": provenance.stamp("n/a (the stamp of this report itself)"),
             "consistent": {"data": len(hashes) <= 1, "config": len(cfgs) <= 1, "data_hashes": sorted(h for h in hashes if h),
                            "config_hashes": sorted(c for c in cfgs if c)},

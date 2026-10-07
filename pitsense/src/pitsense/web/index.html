@@ -17,6 +17,7 @@
   <div id="wx" class="hd">--</div>
   <div id="loss" class="hd">--</div>
   <select id="teamsel" class="teamsel" title="your team on this screen (saved in this browser)" aria-label="focus team"></select>
+  <select id="risksel" class="teamsel" title="how the strategy ranks plans (for every screen)" aria-label="risk"><option value="expected">risk: best average</option><option value="protect">risk: protect</option><option value="aggressive">risk: aggressive</option></select>
   <div id="mode" class="chip">--</div>
   <div id="conn" class="chip off">connecting</div>
 </header>
@@ -69,7 +70,7 @@
       <form id="wiform" class="askform wiform" autocomplete="off">
         <select id="wicar" aria-label="car"></select>
         <label>lap <input id="wilap" type="number" min="1" max="99" value="1" aria-label="stop lap"></label>
-        <select id="wicomp" aria-label="tyre"><option value="">any tyre</option><option>SOFT</option><option>MEDIUM</option><option>HARD</option></select>
+        <select id="wicomp" aria-label="tyre"><option value="">any tyre</option><option>SOFT</option><option>MEDIUM</option><option>HARD</option><option>INTERMEDIATE</option><option>WET</option></select>
         <button id="wibtn" type="submit">Simulate</button>
       </form><div id="wiout" class="wiout" aria-live="polite"></div></section>
     <section class="panel" data-tab="strategy"><h2>Stints <small>every car &middot; line = current lap</small></h2><div id="stintchart"></div></section>

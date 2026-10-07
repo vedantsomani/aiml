@@ -22,7 +22,6 @@ import pandas as pd
 
 from ..pitwall.engineers.safetycar import ALERT_P, sample_labels, status_starts
 from ..state import RaceState
-from .metrics import CAL_BINS, binary_scores, calibration_table
 from .models import BaseRate
 from .tasks import Task
 
@@ -192,7 +191,6 @@ def replay_race(slug: str, step: float = 10.0, feeds: bool = False) -> pd.DataFr
     """
     from bisect import bisect_right
 
-    from .. import registry
     from ..archive import downloaded_sessions
     from ..config import bench_dir
     from ..events import load_archive_session

@@ -6,20 +6,29 @@ One loop, three kinds of source::
     a recording followed as it grows
     live: start the recorder, follow its file
 
-    loop:  state.apply(event) -> wall.observe(state) -> maybe publish a snapshot
+    loop:  state.apply(event) -> wall.observe(state) -> maybe decide -> maybe publish
 
-A snapshot is published when the session clock has advanced ``publish_every_s`` since the
-last one, and on every leader lap. Both triggers use the session clock, never the wall clock,
-so the same input gives the same snapshots and the same call log at any replay speed.
-Each published snapshot is serialised once and handed to the web server (``pitsense.web``);
-calls and alerts are appended to a JSONL log with the session time and the wall-clock time.
+Deciding (the engineers' snapshot; new calls and alerts go to the log) happens every ``PUBLISH_EVERY_S``
+of session time and on every leader lap: the live pit wall's cadence, whatever the replay speed, so a
+replay at any speed logs exactly the calls the live pit wall would have made. Viewers get the latest
+decision on every leader lap and every ``publish_every_s`` (about 3 s of wall time at the starting speed).
+Both use the session clock, never the wall clock, so the same input and starting speed also give the
+same published snapshots. Each published snapshot is serialised once and handed to the web server
+(``pitsense.web``); calls and alerts are appended to a JSONL log with the session time and the
+wall-clock time.
 
-Also here: ``pitsense pitwall`` and ``pitsense shadow-score`` (compare a call log with the
-stops that really happened).
+Nothing slow runs in the loop: the voice writes radio messages in its own thread (the call is logged
+and published at once; its text follows as a ``radio`` record and a re-sent snapshot, so only when the
+text arrives depends on the voice), and questions (``ask``, ``whatif``) run one at a time on a private
+copy of the state and engineers taken under the lock, never on the live ones.
+
+Around it: ``sources.py`` (replay, follow, live), ``shadow.py`` (scoring a call log against the real stops) and
+``commands.py`` (``pitsense pitwall``, ``doctor``, ``shadow-score``).
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -27,7 +36,8 @@ import queue
 import threading
 import time
 from collections import deque
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from .. import events as _events  # the feeder: reads the log; exempt by name in tests/test_pitwall.py
@@ -36,215 +46,24 @@ from ..state import RaceState
 from . import charts
 from . import replay as _replay
 from .types import Snapshot, TeamConfig
+from .shadow import load_call_log, shadow_score  # noqa: F401  (moved; imported from here by older code)
+from .sources import (  # noqa: F401
+    LEAD_IN_S, FollowSource, LiveSource, ReplaySource, Source, feed_has_positions, infer_positions,
+)
 
 log = logging.getLogger("pitsense.pitwall")
 
-PUBLISH_EVERY_S = 3.0  # session seconds between snapshots (wall seconds at 1x)
-MAX_SPEED_TICK_S = 30.0  # snapshot spacing when replaying as fast as possible
-LEAD_IN_S = 60.0  # replay starts pacing this long before the session start
+PUBLISH_EVERY_S = 3.0  # session seconds between decisions (the live cadence), and between snapshots at 1x
+MAX_SPEED_TICK_S = 30.0  # snapshot spacing for viewers when replaying as fast as possible
 LOG_KEEP = 500  # calls and alerts kept in memory for the API
 POS_EVERY_S = 0.5  # session seconds between car positions
 POS_MIN_WALL_S = 0.3  # ...and never faster than ~3 Hz on the wall clock (high replay speeds)
 RADIO_EVERY_WALL_S = 1.0  # how often the team-radio list is rebuilt
 RADIO_KEEP = 80  # driver radio messages in the snapshot
 WALL_KEEP = 120  # pit-wall conversation entries (voice calls and alerts) in the snapshot
-
-
-# ----------------------------------------------------------------------------- sources
-class Source:
-    """Yields events. ``start_utc`` (race start) and ``meta`` are known once the first event is out."""
-
-    mode = "source"
-    speed: float = 1.0
-    ref = None  # archive SessionRef, if any
-    title = ""
-    start_utc: datetime | None = None
-    meta: dict
-
-    def events(self, stop: threading.Event):  # pragma: no cover - interface
-        raise NotImplementedError
-
-
-class ReplaySource(Source):
-    """An EventLog replayed against the wall clock at ``speed`` x (0 = as fast as possible).
-
-    Controllable while it runs: :meth:`pause`, :meth:`resume`, :meth:`set_speed` take effect before the next
-    event; a seek is a :class:`Control` the runtime loop executes (it alone writes state), after which
-    :meth:`jump` moves the read position. ``pos`` is the number of events handed out.
-    """
-
-    mode = "replay"
-    seekable = True
-
-    def __init__(self, log_: _events.EventLog, speed: float = 1.0, *, ref=None, title: str = "", start_utc=None) -> None:
-        self.log, self.speed, self.ref = log_, float(speed), ref
-        self.meta = dict(log_.meta)
-        self.title = title or (ref.slug if ref else "replay")
-        self.start_utc = start_utc if start_utc is not None else (ref.start_utc if ref else None)
-        self.pos = 0
-        self.paused = False
-        self._ctl: deque = deque()
-        self._anchor: tuple[float, float] | None = None  # (wall time, session time) the pacing is measured from
-        self._t_pace = log_.start  # pacing begins here (LEAD_IN_S before the lights)
-        for e in log_.events:
-            if e.topic == "SessionStatus" and isinstance(e.data, dict) and e.data.get("Status") == "Started":
-                self._t_pace = max(log_.start, e.t - LEAD_IN_S)
-                break
-
-    # --- controls (any thread)
-    def _reanchor(self) -> None:
-        self._anchor = None  # the loop re-anchors at the next event
-
-    def pause(self) -> None:
-        self.paused = True
-
-    def resume(self) -> None:
-        self.paused = False
-        self._reanchor()
-
-    def set_speed(self, speed: float) -> None:
-        self.speed = float(speed)
-        self._reanchor()
-
-    def request(self, ctl: Control) -> Control:
-        self._ctl.append(ctl)
-        return ctl
-
-    def jump(self, pos: int) -> None:
-        self.pos = max(0, min(int(pos), len(self.log.events)))
-        self._reanchor()
-
-    def events(self, stop: threading.Event):
-        evs = self.log.events
-        while not stop.is_set():
-            if self._ctl:
-                yield self._ctl.popleft()
-                continue
-            if self.paused:
-                time.sleep(0.03)
-                continue
-            if self.pos >= len(evs):
-                return
-            e = evs[self.pos]
-            if self.speed > 0 and e.t > self._t_pace:
-                if self._anchor is None:
-                    self._anchor = (time.monotonic(), max(e.t, self._t_pace))
-                aw, at = self._anchor
-                delay = aw + (e.t - at) / self.speed - time.monotonic()
-                if delay > 0:
-                    time.sleep(min(delay, 0.05))
-                    continue  # re-check controls, pause and speed
-            self.pos += 1
-            yield e
-
-
-class FollowSource(Source):
-    """A recording followed as it grows (``pitsense record`` output).
-
-    The backlog is read at once; after that new lines are picked up every ``poll_s``.
-    With ``follow=False`` it stops at the end of the file. ``idle_exit_s`` ends a follow after
-    that long without a new line (used by tests).
-    """
-
-    mode = "follow"
-
-    def __init__(self, path: Path, *, follow: bool = True, poll_s: float = 0.25,
-                 idle_exit_s: float | None = None, mode: str | None = None, radio=None) -> None:
-        from ..live import RecordingTail, session_dir_for
-
-        self.path, self.follow, self.poll_s, self.idle_exit_s = Path(path), follow, poll_s, idle_exit_s
-        self.tail = RecordingTail(self.path, feeds=True)
-        self.title = self.path.name
-        self.radio_dir = session_dir_for(self.path)  # mp3s and transcripts saved next to the recording
-        self.meta = {"source": str(self.path), "radio_dir": str(self.radio_dir)}
-        self.speed = 1.0
-        if radio is None:  # downloads missing clips and transcribes them in background threads
-            from ..radio import LiveRadio
-
-            radio = LiveRadio(self.radio_dir)
-        self.radio = radio or None  # radio=False: use only what is already on disk
-        if mode:
-            self.mode = mode
-
-    def events(self, stop: threading.Event):
-        idle_since = time.monotonic()
-        while not stop.is_set():
-            new = self.tail.poll()
-            if new:
-                idle_since = time.monotonic()
-                if self.start_utc is None and self.tail.first_recv is not None:
-                    self.start_utc = datetime.fromtimestamp(self.tail.first_recv, tz=timezone.utc)
-                yield from new
-                continue
-            if not self.follow:
-                return
-            if self.idle_exit_s is not None and time.monotonic() - idle_since > self.idle_exit_s:
-                return
-            time.sleep(self.poll_s)
-
-
-class LiveSource(FollowSource):
-    """Start the recorder (needs ``pitsense[live]``) and follow the file it writes."""
-
-    mode = "live"
-
-    def __init__(self, out: Path, *, minutes: float = 180.0, no_auth: bool = False, **kw) -> None:
-        super().__init__(out, follow=True, **kw)  # makes self.radio
-        self.out, self.minutes, self.no_auth = Path(out), minutes, no_auth
-        self.recorder_error: str | None = None
-        self._thread: threading.Thread | None = None
-
-    def start_recorder(self) -> None:
-        try:
-            import fastf1  # noqa: F401
-        except ImportError as exc:
-            raise RuntimeError("live recording needs the optional dependency: pip install pitsense[live]") from exc
-        from ..live import record
-
-        def run() -> None:
-            try:
-                record(self.out, minutes=self.minutes, no_auth=self.no_auth, radio=self.radio)
-            except Exception as exc:  # shown in /api/health
-                self.recorder_error = f"{type(exc).__name__}: {exc}"
-                log.exception("recorder stopped")
-
-        self._thread = threading.Thread(target=run, name="pitsense-recorder", daemon=True)
-        self._thread.start()
-
-    def events(self, stop: threading.Event):
-        if self._thread is None:
-            self.start_recorder()
-        yield from super().events(stop)
-
-
-# ----------------------------------------------------------------------------- order inference
-def feed_has_positions(update: dict) -> bool:
-    """Does this TimingData update carry car positions?"""
-    lines = update.get("Lines") if isinstance(update, dict) else None
-    return isinstance(lines, dict) and any(isinstance(v, dict) and "Position" in v for v in lines.values())
-
-
-def infer_positions(state: RaceState) -> None:
-    """Order cars from laps and gaps when the feed sends no positions (no-auth live feed).
-
-    Most laps completed first, then smallest gap to the leader (a missing gap counts as 0 only
-    for cars on the leader's lap count), then grid slot, then car number. Written to
-    ``DriverState.position`` so every engineer sees an ordinary tower. Only the runtime does this;
-    ``state.py`` stays a plain reducer of what the feed said.
-    """
-    cars = list(state.drivers.values())
-    if not cars:
-        return
-    top = max(d.laps for d in cars)
-
-    def key(d):
-        gap = d.gap_to_leader
-        if gap is None:
-            gap = 0.0 if d.laps == top else float("inf")
-        return (-d.laps, gap, d.grid if d.grid else 99, int(d.number) if d.number.isdigit() else 999)
-
-    for i, d in enumerate(sorted(cars, key=key), 1):
-        d.position = i
+SNAP_MS_KEEP = 1000  # snapshot build times kept for health()
+VOICE_QUEUE = 4  # calls waiting for the voice (one per car; when full the oldest is dropped)
+ASK_WAIT_S = 10.0  # a question waits this long for the one running before it, then gets "busy"
 
 
 # ----------------------------------------------------------------------------- runtime
@@ -265,6 +84,47 @@ def _call_key(c: dict) -> tuple:
     return (c["car"], c["action"], c.get("compound"))
 
 
+def _call_label(action: str | None, compound: str | None) -> str:
+    return (action or "NO_CALL").replace("_", " ") + (f" {compound}" if compound else "")
+
+
+def call_change(before: dict, c: dict, track: str | None) -> dict:
+    """What changed since a car's previous call: from / to, and why (the reasons that are new, most important first)."""
+    from ..config import TRACK_STATUS
+
+    why = [r.get("text") for r in c.get("reasons") or () if r.get("code") not in before["codes"] and r.get("text")][:3]
+    if track != before.get("track"):
+        why.insert(0, f"track status now {TRACK_STATUS.get(str(track), track)}")
+    if not why:
+        why = ["same reasons, weighed differently as the race moved on"]
+    return {"from": _call_label(before["action"], before.get("compound")), "to": _call_label(c["action"], c.get("compound")),
+            "why": why}
+
+
+@dataclass
+class _VoiceJob:
+    """A call waiting for its radio message (written by the voice thread, never by the loop)."""
+
+    call: object  # the Call
+    snap: Snapshot  # the snapshot it was made in (what the voice reads)
+    id: int  # its id in the pit-wall conversation, reserved when the call was made
+    t_call: float  # the call record's ``t``
+    t: float  # session time and leader lap of the snapshot
+    lap: int
+    gen: int  # jump generation: after a jump the message no longer belongs to the race shown
+    logged: bool  # the call record went to the log file, so its radio record goes too
+
+
+@dataclass
+class _Frozen:
+    """A private copy of the state and the engineers that questions run on, outside the loop's lock."""
+
+    key: tuple  # (jump generation, events, snapshots): reused while nothing has happened
+    state: RaceState
+    wall: object
+    snap: Snapshot | None = None  # the snapshot at this moment, for fact questions (made once)
+
+
 class PitWallRuntime:
     """Follows one source, keeps the latest snapshot, logs calls and alerts, fans out to listeners."""
 
@@ -272,7 +132,7 @@ class PitWallRuntime:
                  models: bool | object = True, history=None, publish_every_s: float | None = None,
                  engineers=None, track: dict | None = None, checkpoint_every: int = 1,
                  index: bool = False, replay_index: "_replay.ReplayIndex | None" = None,
-                 indexer: bool = False) -> None:
+                 indexer: bool = False, coarse: bool = False) -> None:
         self.source = source
         self.team = team or TeamConfig()
         self.log_dir = Path(log_dir) if log_dir else None
@@ -284,14 +144,25 @@ class PitWallRuntime:
             self.publish_every_s = publish_every_s
         else:
             self.publish_every_s = MAX_SPEED_TICK_S if speed <= 0 else PUBLISH_EVERY_S * max(speed, 1.0)
+        self.coarse = coarse  # decide only when publishing: faster at high speed, NOT the live pit wall's calls
+        self.decide_every_s = self.publish_every_s if coarse else PUBLISH_EVERY_S
         self.state = RaceState(source.meta)
         self.wall = None
         self._wall_quali = False
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.lock = threading.Lock()
-        self.sim_lock = threading.RLock()  # the loop applies an event under it; /api/ask reads a still state under it
+        self.sim_lock = threading.RLock()  # the loop applies an event under it; questions copy the state under it
+        self._ask_gate = threading.Lock()  # one question (simulation) at a time; held outside sim_lock
+        self._frozen: _Frozen | None = None
+        self._gen = 0  # bumped by every jump
+        self._log_lock = threading.Lock()  # the call-log file is written by the loop and the voice thread
         self._voice_lock = threading.Lock()
+        self._voice_cv = threading.Condition()
+        self._voice_jobs: dict[str, _VoiceJob] = {}  # car -> its newest call waiting for the voice
+        self._voice_thread: threading.Thread | None = None
+        self._voice_stop = False
+        self.voice_stats = {"done": 0, "superseded": 0, "dropped": 0, "last_ms": None}
         self.transcriber = None  # bytes -> text for /api/ask_audio (default: pitsense.asr.transcribe)
         self._ask_tpl = None
         self.listeners: list[queue.Queue] = []
@@ -310,10 +181,15 @@ class PitWallRuntime:
         self.n_snapshots = 0
         self.observe_errors = 0
         self.snapshot_errors = 0
-        self.snap_ms: list[float] = []
-        self._last_pub_t: float | None = None
-        self._last_pub_lap = -1
+        self.snap_ms: deque = deque(maxlen=SNAP_MS_KEEP)
+        self._decided_t: float | None = None  # session time and leader lap of the last decision
+        self._decided_lap = -1
+        self._sent_t: float | None = None  # session time of the last snapshot published
         self._last_calls: dict[str, tuple] = {}
+        self._last_call_info: dict[str, dict] = {}  # car -> its previous logged call (to say what changed and why)
+        self.changes: dict[str, dict] = {}  # car -> what changed at its latest call change
+        self.acks_log: deque = deque(maxlen=LOG_KEEP)  # the operator's accept / reject answers
+        self.acks: dict[str, dict] = {}  # car -> the latest answer
         self.radio: dict[str, dict] = {}  # car -> latest radio message from the voice
         self.wall_msgs: deque = deque(maxlen=WALL_KEEP)  # pit-wall conversation: voice calls and alerts
         self._wall_id = 0
@@ -412,11 +288,18 @@ class PitWallRuntime:
         self.stop_event.set()
         if self.thread is not None:
             self.thread.join(timeout=10)
+        with self._voice_cv:  # messages still waiting are dropped; one being written is not logged after close
+            self._voice_stop = True
+            self._voice_jobs.clear()
+            self._voice_cv.notify_all()
+        if self._voice_thread is not None:
+            self._voice_thread.join(timeout=2)
         if self.radio_worker is not None:
             self.radio_worker.stop()
-        if self._log_fh:
-            self._log_fh.close()
-            self._log_fh = None
+        with self._log_lock:
+            if self._log_fh:
+                self._log_fh.close()
+                self._log_fh = None
 
     def wait(self, timeout: float | None = None) -> bool:
         """Wait for the source to run out. True if it did."""
@@ -444,8 +327,9 @@ class PitWallRuntime:
             log.exception("pit wall loop failed")
             self.status, self.error = "error", f"{type(exc).__name__}: {exc}"
         finally:
-            if self._log_fh:
-                self._log_fh.flush()
+            with self._log_lock:
+                if self._log_fh:
+                    self._log_fh.flush()
             if self._is_indexer and self.replay_index is not None:
                 self.replay_index.done = self.status == "finished"
                 self.replay_index.error = self.error
@@ -459,7 +343,8 @@ class PitWallRuntime:
             if lap != self._prev_lap:
                 prev, self._prev_lap = self._prev_lap, lap
                 ix = self.replay_index
-                if ix is not None and self.wall is not None and ix.wanted(lap, prev):
+                if ix is not None and self.wall is not None and ix.wanted(lap, prev) \
+                        and (self._is_indexer or self.n_events not in ix.checkpoints):  # the indexing pass saved it already
                     self._checkpoint(prev)
 
     def _handle(self, e: _events.Event) -> None:
@@ -491,10 +376,9 @@ class PitWallRuntime:
             self.observe_errors += 1
             if self.observe_errors <= 3:
                 log.exception("engineer observe failed at t=%.1f", state.t)
-        lap_changed = state.current_lap != self._last_pub_lap
-        due = self._last_pub_t is None or state.t - self._last_pub_t >= self.publish_every_s
-        if due or lap_changed:
-            self.publish()
+        lap_changed = state.current_lap != self._decided_lap
+        if lap_changed or self._decided_t is None or state.t - self._decided_t >= self.decide_every_s:
+            self._tick(lap_changed)
 
     # --------------------------------------------------------------- replay lab
     def _ensure_wall(self) -> None:
@@ -528,7 +412,7 @@ class PitWallRuntime:
             sub = ReplaySource(src.log, 0, ref=src.ref, title=src.title, start_utc=src.start_utc)
             self._indexer_rt = PitWallRuntime(sub, team=self.team, models=self.use_models, history=self.history,
                                               publish_every_s=self.publish_every_s, engineers=self.engineers,
-                                              replay_index=ix, indexer=True)
+                                              replay_index=ix, indexer=True, coarse=self.coarse)
             self._indexer_rt.start()
 
     def _control(self, ctl: "_replay.Control") -> None:
@@ -556,6 +440,10 @@ class PitWallRuntime:
         src, ix = self.source, self.replay_index
         lap = max(0, lap)
         with self.sim_lock:
+            self._gen += 1  # radio messages on their way and the last question's copy belong to the old place
+            self._frozen = None
+            with self._voice_cv:
+                self._voice_jobs.clear()
             if self.wall is None:
                 self._ensure_wall()
             evs = src.log.events
@@ -599,7 +487,8 @@ class PitWallRuntime:
         self.session_info, self.calls_log, self.alerts_log = {}, deque(maxlen=keep), deque(maxlen=keep)
         self.inferred_order = self._feed_positions = False
         self.observe_errors = self.snapshot_errors = self.n_events = self.n_snapshots = 0
-        self._last_pub_t, self._last_pub_lap, self._last_calls = None, -1, {}
+        self._decided_t, self._decided_lap, self._sent_t, self._last_calls = None, -1, None, {}
+        self._last_call_info, self.changes = {}, {}
         self.radio, self.wall_msgs, self._wall_id = {}, deque(maxlen=WALL_KEEP), 0
         self._radio_lap, self._radio_list, self._radio_sig, self._seen_alerts = {}, [], (), set()
         self.positions, self._pos_t, self._prev_lap = {}, None, 0
@@ -694,24 +583,45 @@ class PitWallRuntime:
         return out
 
     # --------------------------------------------------------------- publishing
-    def publish(self, force: bool = False) -> dict | None:
-        state = self.state
+    def _tick(self, lap_changed: bool) -> None:
+        """Decide now; send to viewers on a leader lap or when ``publish_every_s`` has passed since the last send."""
         t0 = time.perf_counter()
+        got = self._decide()
+        if got is None:
+            return
+        t = self.state.t
+        if lap_changed or self._sent_t is None or t - self._sent_t >= self.publish_every_s:
+            self._send(*got, t0)
+
+    def publish(self, force: bool = False) -> dict | None:
+        """Decide and send now (end of a run, tests)."""
+        t0 = time.perf_counter()
+        got = self._decide()
+        return None if got is None else self._send(*got, t0)
+
+    def _decide(self) -> tuple[Snapshot, dict] | None:
+        """The engineers' snapshot as of now; new calls and alerts go to the log."""
+        state = self.state
+        self._decided_t, self._decided_lap = state.t, state.current_lap
         try:
             snap: Snapshot = self.wall.snapshot(state)
         except Exception:
             self.snapshot_errors += 1
             if self.snapshot_errors <= 3:
                 log.exception("snapshot failed at t=%.1f", state.t)
-            self._last_pub_t, self._last_pub_lap = state.t, state.current_lap
             return None
         d = snap.to_dict()
+        self._log_changes(state, d, snap)
+        return snap, d
+
+    def _send(self, snap: Snapshot, d: dict, t0: float) -> dict:
+        """Complete a decision with what only viewers need, serialise it once and hand it to them."""
+        state = self.state
         d["extra"] = self._extra(state)
         try:
             d["extra"]["details"] = self.wall.details(state)
         except Exception:
             log.exception("engineer details failed at t=%.1f", state.t)
-        self._log_changes(state, d, snap)
         try:
             d["extra"]["charts"] = charts.build(state, self.wall.memory, snap.focus)
         except Exception:
@@ -721,7 +631,7 @@ class PitWallRuntime:
         payload = _json_bytes(d)
         ms = (time.perf_counter() - t0) * 1000
         self.snap_ms.append(ms)
-        self._last_pub_t, self._last_pub_lap = state.t, state.current_lap
+        self._sent_t = state.t
         self.n_snapshots += 1
         self._log_alarms_if_changed()  # print to console if alarms change
         with self.lock:
@@ -862,31 +772,12 @@ class PitWallRuntime:
             "rc": rc,
             "track_status_since": round(state.track_status_since, 1),
             "team": self.team.team, "wall_time": time.time(),
+            "changes": dict(self.changes), "acks": dict(self.acks), "risk": self.team.risk,
         }
-
-    def _say(self, snap: Snapshot, car: str) -> str | None:
-        """The voice's radio message for car's current call (None if the voice is off or fails)."""
-        if self.voice is False:
-            return None
-        try:
-            if self.voice is None:
-                from ..voice.api import Voice
-
-                self.voice = Voice()
-            call = next((c for c in snap.calls if c.car == car), None)
-            if call is None or call.action == "NO_CALL":
-                return None
-            from ..voice.api import say
-
-            with self._voice_lock:
-                return say(call, snap, self.voice)
-        except Exception:
-            log.exception("voice failed; continuing without it")
-            self.voice = False
-            return None
 
     def _log_changes(self, state: RaceState, d: dict, snap: Snapshot | None = None) -> None:
         wall = round(time.time(), 3)
+        voice = snap is not None and self.voice is not False and not (self._silent or self._is_indexer)
         for c in d["calls"]:
             key = _call_key(c)
             prev = self._last_calls.get(c["car"])
@@ -896,14 +787,17 @@ class PitWallRuntime:
             car = state.drivers.get(c["car"])
             rec = {"kind": "call", "t": c["t"], "wall": wall, "lap": state.current_lap,
                    "car_lap": (car.laps + 1) if car else None, **{k: v for k, v in c.items() if k not in ("t",)}}
-            radio = self._say(snap, c["car"]) if snap is not None else None
-            if radio:
-                rec["radio"] = radio
+            before = self._last_call_info.get(c["car"])
+            if before is not None:
+                rec["change"] = self.changes[c["car"]] = call_change(before, c, state.track_status)
+            self._last_call_info[c["car"]] = {"action": c["action"], "compound": c.get("compound"), "track": state.track_status,
+                                              "codes": [r.get("code") for r in c.get("reasons") or ()]}
+            logged = self._record(rec, self.calls_log)
+            call = next((x for x in snap.calls if x.car == c["car"]), None) if voice else None
+            if call is not None and call.action != "NO_CALL":  # its radio message follows from the voice thread
                 self._wall_id += 1
-                self.radio[c["car"]] = {"text": radio, "lap": state.current_lap, "action": c["action"], "id": self._wall_id}
-                self.wall_msgs.append({"id": self._wall_id, "kind": "voice", "car": c["car"], "t": round(state.t, 1),
-                                       "lap": state.current_lap, "text": radio, "action": c["action"]})
-            self._record(rec, self.calls_log)
+                self._voice_put(_VoiceJob(call, snap, self._wall_id, c["t"], round(state.t, 1), state.current_lap,
+                                          self._gen, logged))
         for a in d["alerts"]:
             key = (a["engineer"], a["code"], a.get("car"), a.get("since"))
             if key in self._seen_alerts:
@@ -915,21 +809,107 @@ class PitWallRuntime:
                                    "lap": state.current_lap, "text": a.get("message"), "engineer": a.get("engineer"),
                                    "severity": a.get("severity")})
 
-    def _record(self, rec: dict, mem: deque) -> None:
+    def _record(self, rec: dict, mem: deque) -> bool:
+        """Keep a call or alert record. True if it went to the log file (a replayed jump never logs again)."""
         mem.append(rec)
         if self.replay_index is not None:
             try:
                 _replay.marks_from_record(self.replay_index, rec, self.team.focus(self.state), self.state)
             except Exception:
                 log.exception("bookmark failed")
-        if self._log_fh and self.n_events > self._hwm:
+        return self.n_events > self._hwm and self._write_log(rec)
+
+    def _write_log(self, rec: dict) -> bool:
+        with self._log_lock:
+            if not self._log_fh:
+                return False
             self._log_fh.write(json.dumps(rec, separators=(",", ":"), default=str) + "\n")
             self._log_fh.flush()
+            return True
+
+    # --------------------------------------------------------------- the voice (its own thread)
+    def _voice_put(self, job: _VoiceJob) -> None:
+        """Queue a call for the voice; never blocks. A newer call for a car replaces the one still waiting."""
+        car = job.call.car
+        with self._voice_cv:
+            if self._voice_stop:
+                return
+            if car in self._voice_jobs:
+                self.voice_stats["superseded"] += 1
+            elif len(self._voice_jobs) >= VOICE_QUEUE:  # the longest-waiting message is stale by now
+                del self._voice_jobs[next(iter(self._voice_jobs))]
+                self.voice_stats["dropped"] += 1
+            self._voice_jobs[car] = job  # a replaced call keeps its car's place in the queue
+            if self._voice_thread is None:
+                self._voice_thread = threading.Thread(target=self._voice_loop, name="pitsense-voice", daemon=True)
+                self._voice_thread.start()
+            self._voice_cv.notify()
+
+    def _voice_loop(self) -> None:
+        """One radio message at a time, the car that has waited longest first."""
+        while True:
+            with self._voice_cv:
+                while not self._voice_jobs and not self._voice_stop:
+                    self._voice_cv.wait()
+                if self._voice_stop:
+                    return
+                job = self._voice_jobs.pop(next(iter(self._voice_jobs)))
+            if job.gen != self._gen:
+                continue
+            t0 = time.perf_counter()
+            text = self._say(job)
+            if text:
+                self.voice_stats["done"] += 1
+                self.voice_stats["last_ms"] = round((time.perf_counter() - t0) * 1000)
+                self._voice_done(job, text)
+
+    def _say(self, job: _VoiceJob) -> str | None:
+        """The voice's radio message for a waiting call (None if the voice is off or fails)."""
+        try:
+            from ..voice.api import Voice, say
+
+            with self._voice_lock:
+                if self.voice is None:
+                    self.voice = Voice()  # loaded on the first call, in this thread
+                voice = self.voice
+                return say(job.call, job.snap, voice) if voice is not False else None
+        except Exception:
+            log.exception("voice failed; continuing without it")
+            self.voice = False
+            return None
+
+    def _voice_done(self, job: _VoiceJob, text: str) -> None:
+        """A radio message is ready: log it, add it to the conversation, send it to the viewers."""
+        c = job.call
+        if job.logged:  # a record of its own after the call's, which stays the same at any speed
+            self._write_log({"kind": "radio", "car": c.car, "t": job.t_call, "action": c.action, "lap": job.lap,
+                             "wall": round(time.time(), 3), "text": text})
+        with self.sim_lock:
+            if job.gen != self._gen:  # a jump since: the race shown is elsewhere
+                return
+            self.radio[c.car] = {"text": text, "lap": job.lap, "action": c.action, "id": job.id}
+            self.wall_msgs.append({"id": job.id, "kind": "voice", "car": c.car, "t": job.t, "lap": job.lap,
+                                   "text": text, "action": c.action})
+            old = self.latest
+            extra = {"radio": dict(self.radio), "wall_msgs": list(self.wall_msgs)}
+        if old is None:
+            return
+        new = {**old, "extra": {**old["extra"], **extra}}
+        payload = _json_bytes(new)
+        with self.sim_lock:  # in order: a snapshot published since carries the message already
+            if self.latest is not old:
+                return
+            with self.lock:
+                self.latest, self.latest_bytes = new, payload
+            self._notify({"event": "snapshot", "data": payload})
 
     # --------------------------------------------------------------- listeners
-    def subscribe(self) -> queue.Queue:
+    def subscribe(self, limit: int | None = None) -> queue.Queue | None:
+        """A queue of events for one viewer, or None if ``limit`` viewers are connected (checked atomically)."""
         q: queue.Queue = queue.Queue(maxsize=8)
         with self.lock:
+            if limit is not None and len(self.listeners) >= limit:
+                return None
             self.listeners.append(q)
         return q
 
@@ -1008,7 +988,9 @@ class PitWallRuntime:
             "snapshot_ms_max": round(ms[-1], 2) if ms else None,
             "call_log": str(self.log_path) if self.log_path else None,
             "recorder_error": getattr(self.source, "recorder_error", None),
+            "recorder_restarts": getattr(self.source, "recorder_restarts", None),
             "radio": None if self.radio_worker is None else dict(self.radio_worker.stats, error=self.radio_worker.error),
+            "voice": None if self.voice is False else dict(self.voice_stats, waiting=len(self._voice_jobs)),
             "track": None if self.track is None else ("provisional" if self.track.get("provisional") else "stored"),
             "alarms": alarms,
             "replay": self.replay_status(),
@@ -1037,7 +1019,7 @@ class PitWallRuntime:
     def wall_text(self, car: str, msg_id: int | None = None) -> str | None:
         """Text of one of our own pit-wall voice messages (by id), else the car's latest."""
         if msg_id is not None:
-            for m in self.wall_msgs:
+            for m in list(self.wall_msgs):  # a copy: the loop and the voice thread append to it
                 if m["id"] == msg_id and m["kind"] == "voice" and m["car"] == car:
                     return m["text"]
             return None
@@ -1064,6 +1046,37 @@ class PitWallRuntime:
             self.wall_msgs.append(m)
             return m
 
+    def _freeze(self) -> _Frozen:
+        """A private copy of the state and the engineers as of now, for questions (call under sim_lock).
+
+        Questions run on it after the lock is released, so the loop never waits for a simulation, and nothing a viewer
+        asks reaches what the live engineers keep (memory, call history, the strategy cache): the call log is the same
+        whoever asks what. The Context (models, history, priors; read-only) is shared, its in-place caches and the
+        models engineer's memo of predictions are copied shallowly (their entries never change once made; a deep copy
+        of that memo took ~1.7 s at lap 40, the rest of the copy ~30 ms). One copy serves every question until an
+        event, a snapshot or a jump.
+        """
+        key = (self._gen, self.n_events, self.n_snapshots)
+        f = self._frozen
+        if f is not None and f.key == key:
+            return f
+        ctx = self.wall.ctx
+        own = copy.copy(ctx)
+        for k, v in ctx.__dict__.items():
+            if k.startswith("_") and type(v) is dict:  # caches filled in place (the strategy analysis)
+                own.__dict__[k] = dict(v)
+        memo = {id(ctx): own}
+        rows = getattr(next((e for e in self.wall.engineers if e.name == "models"), None), "_memo", None)
+        if type(rows) is dict:
+            memo[id(rows)] = dict(rows)
+        state, wall = copy.deepcopy((self.state, self.wall), memo)
+        self._frozen = f = _Frozen(key, state, wall)
+        return f
+
+    @staticmethod
+    def _busy() -> dict:
+        return {"ok": False, "busy": True, "error": "the pit wall is answering another question: try again in a moment"}
+
     def ask(self, car: str | None, text: str, *, source: str = "text") -> dict:
         """Answer a question about ``car`` as of now: a what-if on the simulator, or a fact through the voice.
 
@@ -1078,25 +1091,33 @@ class PitWallRuntime:
         if not text:
             return {"ok": False, "error": "empty question"}
         t0 = time.perf_counter()
-        res = None
-        with self.sim_lock:
-            state = self.state
-            if self.wall is None or self._wall_quali or not state.drivers:
-                return {"ok": False, "error": "the pit wall has no race data yet"}
-            if not car or car not in state.drivers:
-                focus = self.team.focus(state)
-                order = [d.number for d in state.running_order() if d.running]
-                car = focus[0] if focus else (order[0] if order else next(iter(state.drivers)))
-            tla_of = {n: d.tla for n, d in state.drivers.items()}
-            q = whatif.parse_question(text, tla_of, car)
-            snap = None
-            if q.kind in ("whatif", "sc"):
-                res = whatif.what_if(self.wall, state, car, q)
-                answer, src = res["answer"], "whatif"
+        if not self._ask_gate.acquire(timeout=ASK_WAIT_S):
+            return self._busy()
+        res = snap = None
+        try:
+            with self.sim_lock:  # only the copy is made under the loop's lock
+                state = self.state
+                if self.wall is None or self._wall_quali or not state.drivers:
+                    return {"ok": False, "error": "the pit wall has no race data yet"}
+                if not car or car not in state.drivers:
+                    focus = self.team.focus(state)
+                    order = [d.number for d in state.running_order() if d.running]
+                    car = focus[0] if focus else (order[0] if order else next(iter(state.drivers)))
+                tla_of = {n: d.tla for n, d in state.drivers.items()}
+                q = whatif.parse_question(text, tla_of, car)
+                f = self._freeze()
+            state = f.state
+            if q.kind in ("whatif", "sc", "rain", "dry"):
+                res = whatif.what_if(f.wall, state, car, q)
+                answer, src = res.get("answer") or whatif.compose(res), "whatif"
             else:
-                snap = self.wall.snapshot(state)
+                if f.snap is None:
+                    f.snap = f.wall.snapshot(state)
+                snap = f.snap
                 call = next((c for c in snap.calls if c.car == car), None) or Call(snap.t, car, "NO_CALL")
                 nb = {"ahead": snap.cars.get(car, {}).get("rivals__ahead"), "behind": snap.cars.get(car, {}).get("rivals__behind")}
+        finally:
+            self._ask_gate.release()
         you = self._push_wall(kind="you", car=car, text=text, source=source)
         if snap is not None:
             try:
@@ -1167,329 +1188,80 @@ class PitWallRuntime:
         from .engineers.strategy.priors import DRY
 
         comp = str(compound).upper() if compound else None
-        if comp is not None and comp not in DRY:
-            return {"ok": False, "error": f"compound must be one of {', '.join(DRY)}"}
+        if comp is not None and comp not in DRY + wi.WET:  # wet tyres go to the wet simulator
+            return {"ok": False, "error": f"compound must be one of {', '.join(DRY + wi.WET)}"}
         try:
             lap = int(stop_lap)
         except (TypeError, ValueError):
             return {"ok": False, "error": "stop lap must be a whole number"}
         t0 = time.perf_counter()
-        with self.sim_lock:
-            state = self.state
-            if self.wall is None or self._wall_quali or not state.drivers:
-                return {"ok": False, "error": "the pit wall has no race data yet"}
-            car = str(car or "")
-            if car not in state.drivers:
-                return {"ok": False, "error": f"unknown car {car!r}"}
+        if not self._ask_gate.acquire(timeout=ASK_WAIT_S):
+            return self._busy()
+        try:
+            with self.sim_lock:  # only the copy is made under the loop's lock
+                state = self.state
+                if self.wall is None or self._wall_quali or not state.drivers:
+                    return {"ok": False, "error": "the pit wall has no race data yet"}
+                car = str(car or "")
+                if car not in state.drivers:
+                    return {"ok": False, "error": f"unknown car {car!r}"}
+                f = self._freeze()
             q = wi.Question(f"stop on lap {lap}", "whatif", (wi.Spec("lap", lap=lap, compound=comp),))
-            r = wi.what_if(self.wall, state, car, q)
+            r = wi.what_if(f.wall, f.state, car, q)
+        finally:
+            self._ask_gate.release()
         if not r.get("ok"):
             return {"ok": False, "error": r.get("why") or "no answer", "car": car}
         keep = ("car", "tla", "lap", "total", "position", "compound", "tyre_age", "scenario", "versus", "delta_pos", "delta_time_s",
-                "p_gain", "p_loss", "legal", "notes", "reasons", "answer", "n_sims", "t")
+                "p_gain", "p_loss", "legal", "notes", "reasons", "answer", "n_sims", "t", "wet", "horizon_laps")
         return {"ok": True, **{k: r.get(k) for k in keep}, "stop_lap": max(lap, r["lap"]), "ms": round((time.perf_counter() - t0) * 1000)}
 
     def calls(self) -> dict:
         with self.lock:
             cur = (self.latest or {}).get("calls", [])
             hist = list(self.calls_log)
-        return {"current": cur, "log": hist}
+        return {"current": cur, "log": hist, "acks": list(self.acks_log)}
+
+    def set_risk(self, risk) -> dict:
+        """How the strategy ranks plans from now on (expected | protect | aggressive); the next decision replans."""
+        import dataclasses
+
+        risk = str(risk or "").lower()
+        if risk not in ("expected", "protect", "aggressive"):
+            return {"ok": False, "error": "risk must be expected, protect or aggressive"}
+        with self.sim_lock:
+            self.team = dataclasses.replace(self.team, risk=risk)
+            if self.wall is not None:
+                self.wall.ctx.team = self.team
+        return {"ok": True, "risk": risk}
+
+    def ack(self, car, decision, reason: str | None = None, call_t=None) -> dict:
+        """The operator's answer to a car's call: accept or reject, with an optional reason. Kept for the post-race
+        review (``shadow-score``) and written to the call log; it never changes what the engineers decide."""
+        decision = str(decision or "").lower()
+        if decision not in ("accept", "reject"):
+            return {"ok": False, "error": "decision must be accept or reject"}
+        car, reason = str(car or ""), " ".join(str(reason or "").split())[:200]
+        with self.sim_lock:
+            calls = [r for r in self.calls_log if r.get("kind") == "call" and r.get("car") == car and r.get("action") != "NO_CALL"]
+            if call_t is not None:
+                try:
+                    calls = [r for r in calls if abs(float(r["t"]) - float(call_t)) < 1e-3]
+                except (TypeError, ValueError):
+                    return {"ok": False, "error": "call_t must be a number"}
+            if not calls:
+                return {"ok": False, "error": f"no call to answer for car {car!r}"}
+            c = calls[-1]
+            rec = {"kind": "ack", "car": car, "call_t": c["t"], "action": c["action"], "compound": c.get("compound"),
+                   "call_lap": c.get("car_lap"), "decision": decision, "reason": reason or None,
+                   "t": round(self.state.t, 1), "lap": self.state.current_lap, "wall": round(time.time(), 3)}
+            self.acks_log.append(rec)
+            self.acks[car] = rec
+        self._write_log(rec)
+        return {"ok": True, "ack": rec}
 
     def alerts(self) -> dict:
         with self.lock:
             cur = (self.latest or {}).get("alerts", [])
             hist = list(self.alerts_log)
         return {"active": cur, "log": hist}
-
-
-# ----------------------------------------------------------------------------- shadow scoring
-def load_call_log(path: Path) -> list[dict]:
-    rows = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rows.append(json.loads(line))
-            except ValueError:
-                continue  # a half-written last line
-    return rows
-
-
-def shadow_score(calls: list[dict], final: RaceState, k: int = 2, cars: set[str] | None = None) -> dict:
-    """Compare logged calls with the stops that really happened.
-
-    A BOX / PREPARE_BOX call from a car's lap L (``car_lap``) counts as right when that
-    car's real stop (its in-lap, red-flag stops excluded) is within L-k .. L+k. A STAY_OUT call is
-    right when the car has no stop in L .. L+k. Recall: share of real stops that had a box call within
-    +-k laps. BOX_IF_SC is scored apart, only when its SC/VSC trigger happened (``box_if_sc``). NO_CALL is not scored. Calls are scored as logged; later calls never rewrite earlier ones.
-    """
-    stops: dict[str, list[int]] = {}
-    for p in final.pit_events:
-        if not p.under_red:
-            stops.setdefault(p.driver, []).append(p.in_lap)
-    box = [c for c in calls if c.get("kind") == "call" and c.get("action") in ("BOX", "PREPARE_BOX")]
-    stay = [c for c in calls if c.get("kind") == "call" and c.get("action") == "STAY_OUT"]
-    if cars:
-        box, stay = [c for c in box if c["car"] in cars], [c for c in stay if c["car"] in cars]
-
-    def lap_of(c) -> int:
-        return int(c.get("car_lap") or c.get("lap") or 0)
-
-    box_hit = [any(abs(s - lap_of(c)) <= k for s in stops.get(c["car"], [])) for c in box]
-    stay_ok = [not any(0 <= s - lap_of(c) <= k for s in stops.get(c["car"], [])) for c in stay]
-    real = [(car, s) for car, laps in stops.items() if not cars or car in cars for s in laps]
-    covered = [any(c["car"] == car and abs(s - lap_of(c)) <= k for c in box) for car, s in real]
-
-    def rate(xs):
-        return round(sum(xs) / len(xs), 4) if xs else None
-
-    by_action: dict[str, dict] = {}
-    for c, ok in zip(box, box_hit):
-        a = by_action.setdefault(c["action"], {"calls": 0, "right": 0})
-        a["calls"] += 1
-        a["right"] += ok
-    return {
-        "k": k, "calls_logged": len([c for c in calls if c.get("kind") == "call"]),
-        "box_calls": len(box), "box_precision": rate(box_hit), "by_action": by_action,
-        "stay_out_calls": len(stay), "stay_out_accuracy": rate(stay_ok),
-        "real_stops": len(real), "stop_recall": rate(covered),
-        "note": "NO_CALL not scored" if not box and not stay else "",
-        "box_if_sc": _box_if_sc(calls, final, cars),
-    }
-
-
-def _box_if_sc(calls, final, cars) -> dict:
-    """BOX_IF_SC is conditional: scored only when an SC/VSC came within its window (bench/callscore.py)."""
-    from ..bench import callscore
-
-    facts = callscore.race_facts(final)
-    rows = [callscore.score_call(c, facts) for c in calls if c.get("kind") == "call" and c.get("action") == "BOX_IF_SC"
-            and (not cars or c["car"] in cars)]
-    trig = [r for r in rows if r["triggered"]]
-    return {"calls": len(rows), "triggered": len(trig), "right": sum(bool(r["right"]) for r in trig),
-            "precision_when_triggered": round(sum(bool(r["right"]) for r in trig) / len(trig), 4) if trig else None}
-
-
-# ----------------------------------------------------------------------------- CLI
-def _team_config(text: str | None) -> TeamConfig:
-    if not text:
-        return TeamConfig()
-    parts = [p.strip() for p in text.split(",") if p.strip()]
-    if parts and all(p.isdigit() for p in parts):
-        return TeamConfig(cars=tuple(parts))
-    return TeamConfig(team=text.strip())
-
-
-SESSION_NAMES = {None: None, "race": "Race", "sprint": "Sprint", "qualifying": "Qualifying",
-                 "sprint-qualifying": "Sprint Qualifying", "practice1": "Practice 1",
-                 "practice2": "Practice 2", "practice3": "Practice 3"}
-
-
-def build_source(a) -> Source:
-    if a.live:
-        out = Path(a.out) if a.out else Path(os.environ.get("PITSENSE_DATA", "data")) / "live" / (
-            datetime.now().strftime("%Y%m%dT%H%M%S") + "-live.jsonl")
-        return LiveSource(out, minutes=a.minutes, no_auth=a.no_auth)
-    if a.file and a.follow:
-        return FollowSource(Path(a.file), follow=True)
-    if a.file:  # a finished recording: replay it at --speed
-        from ..live import load_recording
-
-        return ReplaySource(load_recording(Path(a.file), feeds=True), a.speed, title=Path(a.file).name)
-    if not a.race:
-        raise SystemExit("give --race (archive replay), --file (a recording) or --live")
-    from .. import archive
-    ref = archive.find_session(a.year, a.race, SESSION_NAMES.get(a.session) or ("Sprint" if a.sprint else "Race"))
-    if not (ref.local_dir / "TimingData.jsonStream").exists():
-        archive.download_session(ref)
-    return ReplaySource(load_with_feeds(ref.local_dir), a.speed, ref=ref)
-
-
-def load_with_feeds(session_dir: Path) -> _events.EventLog:
-    """Timing, positions and radio (not CarData: the dashboard does not use telemetry channels)."""
-    files = Path(session_dir).glob("*.jsonStream")
-    return _events.load_archive_session(session_dir, tuple(f.stem for f in files if f.stem != "CarData.z"))
-
-
-def _lan_ip() -> str:
-    import socket
-
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sk:
-            sk.connect(("10.255.255.255", 1))  # no packet is sent; picks the outgoing interface
-            return sk.getsockname()[0]
-    except OSError:
-        return "<this-computer-ip>"
-
-
-def cmd_doctor(a) -> None:
-    """Pre-race check: model bundle, Whisper, Piper, disk space, smoke test."""
-    import shutil
-    from .. import archive
-    from ..state import replay
-
-    print("PitSense pre-race check")
-    print("-" * 40)
-
-    checks = []
-
-    # 1. Model bundle available
-    try:
-        from ..modelstore import latest_bundle_for
-        from datetime import datetime, timezone
-        bundle = latest_bundle_for(datetime.now(timezone.utc))
-        checks.append(("Model bundle", "OK" if bundle else "FAIL", ""))
-    except Exception as e:
-        checks.append(("Model bundle", "FAIL", str(e)))
-
-    # 2. Whisper importable
-    try:
-        import faster_whisper
-        checks.append(("Whisper (faster-whisper)", "OK", ""))
-    except ImportError:
-        checks.append(("Whisper (faster-whisper)", "FAIL", "pip install faster-whisper"))
-
-    # 3. Piper voice files present
-    try:
-        from ..voice import tts as voice_tts
-        if voice_tts.available():
-            voice_path = voice_tts.voice_dir() / (voice_tts.DEFAULT_VOICE + ".onnx")
-            if voice_path.exists():
-                checks.append(("Piper voice files", "OK", f"{voice_tts.DEFAULT_VOICE}"))
-            else:
-                checks.append(("Piper voice files", "WARN", f"run: python -m piper.download_voices {voice_tts.DEFAULT_VOICE}"))
-        else:
-            checks.append(("Piper voice files", "FAIL", "pip install piper-tts"))
-    except Exception as e:
-        checks.append(("Piper voice files", "FAIL", str(e)))
-
-    # 4. Disk space
-    try:
-        data_dir = Path(os.environ.get("PITSENSE_DATA", "data"))
-        stat = shutil.disk_usage(data_dir)
-        free_gb = stat.free / (1024 ** 3)
-        if free_gb > 1:
-            checks.append(("Disk space", "OK", f"{free_gb:.1f} GB free"))
-        else:
-            checks.append(("Disk space", "WARN", f"only {free_gb:.1f} GB free"))
-    except Exception as e:
-        checks.append(("Disk space", "FAIL", str(e)))
-
-    # 5. Smoke test: replay a short race
-    try:
-        ref = archive.find_session(2026, "hungary", "Race")
-        if not (ref.local_dir / "TimingData.jsonStream").exists():
-            checks.append(("Smoke test (replay)", "SKIP", "Hungary 2026 not downloaded"))
-        else:
-            log = load_with_feeds(ref.local_dir)
-            state = replay(log)
-            if state.current_lap >= 3 and len(state.laps) > 0:
-                checks.append(("Smoke test (replay)", "OK", f"{len(state.laps)} laps"))
-            else:
-                checks.append(("Smoke test (replay)", "FAIL", "replay did not produce laps"))
-    except Exception as e:
-        checks.append(("Smoke test (replay)", "FAIL", str(e)[:60]))
-
-    # Print results
-    max_name = max(len(name) for name, _, _ in checks)
-    for name, status, detail in checks:
-        icon = "✓" if status == "OK" else "✗" if status == "FAIL" else "⚠"
-        print(f"{icon} {name:<{max_name}} {status:<4} {detail}")
-
-    # Overall status
-    failed = [name for name, status, _ in checks if status == "FAIL"]
-    if failed:
-        print(f"\nFAIL: {len(failed)} check(s) failed")
-        import sys
-        sys.exit(1)
-    else:
-        print("\nOK: Ready for race day")
-
-
-def cmd_pitwall(a) -> None:
-    from ..config import data_dir
-    from ..web.server import serve
-
-    src = build_source(a)
-    log_dir = Path(a.log_dir) if a.log_dir else data_dir() / "pitwall"
-    rt = PitWallRuntime(src, team=_team_config(a.team), log_dir=log_dir, models=not a.no_models,
-                        index=getattr(src, "seekable", False))  # a replay: prepare every lap in the background so jumps are instant
-    rt.start()
-    server = serve(rt, host=a.host, port=a.port, token=a.token)
-    port = server.server_address[1]
-    q = f"?token={a.token}" if a.token else ""
-    url = f"http://{'127.0.0.1' if a.host in ('0.0.0.0', '') else server.server_address[0]}:{port}/{q}"
-    print(f"Pit wall on {url}   ({src.mode}: {src.title})   call log: {rt.log_path}")
-    if a.host in ("0.0.0.0", ""):
-        print(f"On the same Wi-Fi open  http://{_lan_ip()}:{port}/{q}" + ("" if a.token else "   (no --token: anyone on the network can watch and ask)"))
-    if not a.no_browser:
-        import webbrowser
-
-        webbrowser.open(url)
-    try:
-        while True:
-            time.sleep(0.5)
-            if a.no_browser and rt.status in ("finished", "error"):  # headless: exit once the replay is done
-                break
-    except KeyboardInterrupt:
-        print("\nstopping")
-    finally:
-        server.shutdown()
-        rt.stop()
-
-
-def cmd_shadow_score(a) -> None:
-    from .. import archive
-    from ..state import replay
-
-    ref = archive.find_session(a.year, a.race, "Sprint" if a.sprint else "Race")
-    final = replay(_events.load_archive_session(ref.local_dir))
-    calls = load_call_log(Path(a.log))
-    res = shadow_score(calls, final, a.k, set(a.cars) if a.cars else None)
-    res["race"] = ref.slug
-    if a.json:
-        print(json.dumps(res, indent=1))
-        return
-    print(f"{ref.slug}  calls from {a.log}  (+-{a.k} laps)")
-    for key, v in res.items():
-        if key not in ("race", "k"):
-            print(f"  {key:<18} {v}")
-
-
-def add_commands(sub) -> None:
-    s = sub.add_parser("pitwall", help="follow a race and show the strategy screen in the browser")
-    s.add_argument("--year", type=int, default=2026)
-    s.add_argument("--race", help="archive replay, e.g. 'hungary'")
-    s.add_argument("--sprint", action="store_true")
-    s.add_argument("--session", choices=[k for k in SESSION_NAMES if k],
-                   help="session of the meeting (default race): qualifying and sprint-qualifying get the qualifying panel")
-    s.add_argument("--speed", type=float, default=1.0, help="replay speed (x real time; 0 = as fast as possible)")
-    s.add_argument("--file", help="a recording from `pitsense record`")
-    s.add_argument("--follow", action="store_true", help="with --file: follow it as it grows instead of replaying")
-    s.add_argument("--live", action="store_true", help="start the recorder and follow its file (needs pitsense[live])")
-    s.add_argument("--out", help="with --live: recording file (default data/live/<time>-live.jsonl)")
-    s.add_argument("--minutes", type=float, default=180, help="with --live: stop recording after this long")
-    s.add_argument("--no-auth", action="store_true", help="with --live: skip F1 TV sign-in (no positions)")
-    s.add_argument("--team", help="your team, e.g. 'ferrari', or car numbers '16,44'")
-    s.add_argument("--host", default="127.0.0.1", help="0.0.0.0 lets phones on the same Wi-Fi connect (use --token)")
-    s.add_argument("--token", help="require ?token=<this> on every request (first page load sets a cookie)")
-    s.add_argument("--port", type=int, default=8765, help="0 = any free port")
-    s.add_argument("--no-browser", action="store_true")
-    s.add_argument("--no-models", action="store_true", help="don't load a trained model bundle")
-    s.add_argument("--log-dir", help="where the calls log goes (default data/pitwall)")
-    s.set_defaults(fn=cmd_pitwall)
-
-    s = sub.add_parser("shadow-score", help="compare a pit wall calls log with the stops that happened")
-    s.add_argument("--log", required=True, help="calls-*.jsonl written by `pitsense pitwall`")
-    s.add_argument("--year", type=int, default=2026)
-    s.add_argument("--race", required=True)
-    s.add_argument("--sprint", action="store_true")
-    s.add_argument("--k", type=int, default=2, help="a call is right if the stop is within +-k laps")
-    s.add_argument("--cars", nargs="+", help="only these car numbers")
-    s.add_argument("--json", action="store_true")
-    s.set_defaults(fn=cmd_shadow_score)
-
-    s = sub.add_parser("doctor", help="pre-race checks: model, Whisper, Piper, disk space, smoke test")
-    s.set_defaults(fn=cmd_doctor)

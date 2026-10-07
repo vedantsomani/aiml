@@ -18,7 +18,6 @@ import json
 import pickle
 import time
 from concurrent.futures import ProcessPoolExecutor
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -35,7 +34,7 @@ from ..pitwall.types import TeamConfig
 from ..pitwall.wall import PitWall
 from ..state import RaceState
 from .evaluate import EvalResult
-from .metrics import CAL_BINS, calibration_table
+from .metrics import calibration_table
 from .tasks import Task
 
 FRACS = (0.25, 0.5, 0.75)
@@ -192,7 +191,7 @@ def run_race(args) -> dict:
                             last_key[c.car] = key
                             calls.append({"kind": "call", "t": c.t, "lap": state.current_lap, "car_lap": lap.lap + 1,
                                           "car": c.car, "action": c.action, "compound": c.compound,
-                                          "confidence": c.confidence})
+                                          "confidence": c.confidence, "confidence_raw": c.confidence_raw})
     res = {"slug": slug, "year": year, "top5": top5, "fc": fc_rows, "ns": ns_rows, "calls": calls,
            "stops": {k: stops.get(k, []) for k in top5}, "trace": trace, "calls_s": t_calls / max(n_calls, 1)}
     if calls_on:

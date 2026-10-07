@@ -15,13 +15,11 @@ from __future__ import annotations
 
 import os
 import statistics as stats
-from datetime import datetime
-from pathlib import Path
 
 import numpy as np
 
 from ..events import EventLog
-from ..pitwall.types import Call, Plan, PlanStop, Reason, Snapshot, TeamConfig
+from ..pitwall.types import Call, Plan, PlanStop, Snapshot, TeamConfig
 from ..state import RaceState
 
 RACE_PACE_K = 1.06  # median race lap / best qualifying lap, over 2026 races (1.04 Azerbaijan to 1.10 Hungary)
@@ -43,7 +41,7 @@ def session_start(log: EventLog) -> float | None:
 
 
 def team_config(text: str | None) -> TeamConfig:
-    from ..pitwall.runtime import _team_config
+    from ..pitwall.commands import _team_config
 
     return _team_config(text)
 

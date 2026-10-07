@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .sim import (
-    FOLLOW_S, K_STOPS, NOSTOP, OFF, PARAMS, PLACEHOLDER, RETIRED, SC_CAP_S, SC_LAP_FACTOR, VSC_LAP_FACTOR,
+    FOLLOW_S, K_STOPS, OFF, PARAMS, PLACEHOLDER, RETIRED, SC_CAP_S, SC_LAP_FACTOR, VSC_LAP_FACTOR,
     Draws, FieldIn, cliff_ages, lap_times_for, pass_prob, red_tyres, sample_schedules,
 )
 
@@ -72,7 +72,7 @@ def _pit_losses(F: FieldIn, D: Draws, stop: np.ndarray, c: int | None = None) ->
 
 
 def simulate_field(F: FieldIn, D: Draws, stop: np.ndarray | None = None, comp: np.ndarray | None = None) -> FieldRun:
-    S, C, R, A = D.S, F.C, F.R, F.A
+    S, C, R = D.S, F.C, F.R
     if stop is None:
         stop, comp = sample_schedules(F, D)
     lt = np.empty((S, C, R))
@@ -156,7 +156,7 @@ def evaluate_plans(F: FieldIn, D: Draws, run: FieldRun, c: int, stop_lap: np.nda
     """
     S = S_use or D.S
     Pn = stop_lap.shape[0]
-    C, R, A = F.C, F.R, F.A
+    C, R = F.C, F.R
     stop_lap, comp = stop_lap[:, :S], comp[:, :S]
     Dv = _Slice(D, S)
     stop_lap, comp = red_tyres(F, Dv.red_lap[None, :], stop_lap, comp)

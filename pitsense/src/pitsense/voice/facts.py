@@ -130,7 +130,10 @@ class Facts:
             if all(v is not None for v in vals):
                 parts.append(" ".join([tag, *[str(v) for v in vals]]))
 
-        add("LAP", self.lap, self.total, self.left)
+        if self.total is not None:
+            add("LAP", self.lap, self.total, self.left)
+        else:  # race length unknown (some live feeds): the lap alone, which the brief still says
+            add("LAP", self.lap)
         add("POS", self.pos)
         if self.cmp:
             parts.append(f"TY {self.cmp} {self.age if self.age is not None else 0} {self.stops if self.stops is not None else 0}")

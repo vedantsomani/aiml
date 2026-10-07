@@ -27,7 +27,7 @@ from ..pitwall.engineers.weather import HORIZON_S, _compound_class, _raining, _r
 from ..state import RaceState
 from .metrics import CAL_BINS, binary_scores, calibration_table
 from .models import BaseRate
-from .tasks import Task, lap_end_rows
+from .tasks import Task
 
 
 # ----------------------------------------------------------------------------- labels

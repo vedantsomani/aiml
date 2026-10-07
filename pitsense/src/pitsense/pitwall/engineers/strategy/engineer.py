@@ -12,7 +12,8 @@ Values (per focus car, ``strategy__<key>``):
   switching this lap.
 
 Race: ``sc_prob_5`` / ``vsc_prob_5`` (chance of a neutralisation within 5 laps, from this circuit's history).
-Plans are refreshed when a focus car completes a lap, the track status changes, or a rule fact changes.
+Plans are refreshed when a focus car completes a lap, the track status changes, a rule fact changes, the car's tyres
+change (compound, stops made, stint: the feed can confirm a stop a few laps late) or the weather flag changes.
 """
 
 from __future__ import annotations
@@ -26,24 +27,35 @@ def focus_cars(ctx, state) -> list[str]:
     return cars or [d.number for d in state.running_order() if d.running]
 
 
+def _weather_flag(view, rules) -> tuple:
+    """The coarse weather state the planner reads: rain flag up, wet tyres on track, the crossover call and whether
+    the race is still dry. Never the nowcast values (probability, minutes, temperatures): they move on every
+    message and the cache would never hit."""
+    w = view.race("weather")
+    return ((w.get("rainfall") or 0) > 0 or bool(w.get("rain_now")), bool(w.get("wet_running")), w.get("crossover"),
+            bool(rules.get("race_dry", True)))
+
+
 def get_analysis(ctx, memory, state, view) -> dict:
-    """Plans for the focus cars. Each car's plan is refreshed when it completes a lap, the track status
-    changes, or one of its rule facts changes; otherwise the cached plan stands."""
+    """Plans for the focus cars. Each car's plan is refreshed when it completes a lap, the track status or the
+    weather flag changes, one of its rule facts changes, or its tyres change (compound, stops made, stint: the feed
+    confirms a tyre change up to a few laps after the stop); otherwise the cached plan stands."""
     cars = [n for n in focus_cars(ctx, state) if n in state.drivers and state.drivers[n].running]
     rules = view.race("rules")
-    glob = (state.track_status, rules.get("sc_phase"), rules.get("pit_lane_open"), len(cars) > 4)
+    light = len(cars) > 4
+    glob = (state.track_status, rules.get("sc_phase"), rules.get("pit_lane_open"), light, _weather_flag(view, rules), ctx.team.risk)
     cache = ctx.__dict__.setdefault("_strategy_cache", {})
     out, todo = {}, []
     for n in cars:
-        rl = view.car("rules", n)
-        key = (glob, state.drivers[n].laps, bool(rl.get("must_stop")), rl.get("penalty_s_pending"))
+        d, rl = state.drivers[n], view.car("rules", n)
+        key = (glob, d.laps, d.compound, d.pit_stops, d.stint, bool(rl.get("must_stop")), rl.get("penalty_s_pending"))
         hit = cache.get(n)
         if hit is not None and hit[0] == key:
             out[n] = hit[1]
         else:
             todo.append((n, key))
     if todo:
-        res = analysis.analyse(state, view, ctx, memory, [n for n, _ in todo], light=glob[3])
+        res = analysis.analyse(state, view, ctx, memory, [n for n, _ in todo], light=light)
         for n, key in todo:
             if n in res:
                 cache[n] = (key, res[n])

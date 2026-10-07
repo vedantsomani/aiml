@@ -50,6 +50,14 @@ function syncTeamSel(s) {
   sel.value = myTeam;
   if (sel.value !== myTeam) { myTeam = ""; sel.value = ""; }
 }
+// risk: the server's setting, shared by every screen
+function renderRisk(s) {
+  const r = (s.extra || {}).risk, sel = $("risksel");
+  if (r && document.activeElement !== sel) sel.value = r;
+}
+$("risksel").addEventListener("change", (e) => {
+  fetch("/api/risk", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({risk: e.target.value})});
+});
 $("teamsel").addEventListener("change", (e) => {
   myTeam = e.target.value;
   try { localStorage.setItem("pitsense.team", myTeam); } catch (e2) { /* no storage */ }
@@ -79,11 +87,27 @@ function renderCallbar(s) {
   for (const c of s.calls || []) calls[c.car] = c;
   const cars = mine.filter((n) => row[n]);
   $("callbar").hidden = !cars.length;
+  const acks = s.extra.acks || {}, changes = s.extra.changes || {};
   $("callbar").innerHTML = cars.map((n) => {
-    const r = row[n], c = calls[n];
-    return '<span class="cb"><b>' + esc(r.tla || n) + "</b> P" + (r.position == null ? "-" : r.position) + " " + action(c ? c.action : "NO_CALL") + "</span>";
+    const r = row[n], c = calls[n], act = c ? c.action : "NO_CALL", k = acks[n], ch = changes[n];
+    // the operator's answer stands for this call while the call (action and tyre) is the same
+    const same = k && c && k.action === c.action && (k.compound || null) === (c.compound || null);
+    const ans = same ? '<span class="ack ' + esc(k.decision) + '" title="' + esc(k.reason || "") + '">' + (k.decision === "accept" ? "accepted" : "rejected") + "</span>"
+      : act !== "NO_CALL" ? '<button class="ackb" data-car="' + esc(n) + '" data-d="accept" title="accept this call">&#10003;</button>' +
+        '<button class="ackb" data-car="' + esc(n) + '" data-d="reject" title="reject this call (you can give a reason)">&#10007;</button>' : "";
+    const why = ch ? '<small class="chg" title="' + esc(ch.why.join("; ")) + '">was ' + esc(ch.from.toLowerCase()) + ": " + esc(ch.why[0]) + "</small>" : "";
+    return '<span class="cb"><b>' + esc(r.tla || n) + "</b> P" + (r.position == null ? "-" : r.position) + " " + action(act) + " " + ans + why + "</span>";
   }).join("");
 }
+// the operator's accept / reject: logged for the post-race review (pitsense shadow-score), never fed back to the engineers
+$("callbar").addEventListener("click", (e) => {
+  const b = e.target.closest(".ackb");
+  if (!b) return;
+  const d = b.dataset.d, reason = d === "reject" ? (window.prompt("Why reject this call? (optional)") || "") : "";
+  b.disabled = true;
+  fetch("/api/ack", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({car: b.dataset.car, decision: d, reason})})
+    .then((r) => r.json()).then((r) => { if (!r.ok) b.disabled = false; }).catch(() => { b.disabled = false; });
+});
 
 function renderHeader(s) {
   const x = s.extra;
@@ -736,6 +760,15 @@ function syncWiLap(s) {
 function wiResult(r) {
   if (!r || !r.ok) return '<div class="empty">' + esc((r && r.error) || "no answer") + "</div>";
   const sc = r.scenario || {}, v = r.versus || {}, dp = r.delta_pos;
+  if (r.wet) {  // the wet simulator: the car's own race time over the next laps, not positions
+    const dt = r.delta_time_s, wc = dt < -0.5 ? "better" : dt > 0.5 ? "worse" : "";
+    return '<div><span class="kv">' + esc(r.tla) + " " + esc(sc.plan || "") + '</span></div><div><span class="kv">vs plan A <span class="' + wc + '">' +
+      (dt == null ? "--" : (dt > 0 ? "+" : "") + num(dt, 1) + " s") + "</span></span>" +
+      '<span class="kv">next <span>' + esc(r.horizon_laps) + " laps</span></span>" +
+      (r.p_gain != null ? '<span class="kv">better in <span>' + pct(r.p_gain) + "</span></span>" : "") + "</div>" +
+      (v.plan ? "<p>plan A: " + esc(v.plan) + "</p>" : "") + (r.notes || []).map((n) => "<p>" + esc(n) + "</p>").join("") +
+      "<p class=\"dim\">wet simulator: race time only</p>";
+  }
   const cls = dp > 0.05 ? "better" : dp < -0.05 ? "worse" : "";
   return '<div><span class="kv">' + esc(r.tla) + " " + esc(sc.plan || "") + '</span></div><div><span class="kv">expected <span>P' + num(sc.exp_pos, 1) + '</span></span><span class="kv">P10-P90 <span>P' + num(sc.p10, 0) + "-P" + num(sc.p90, 0) + "</span></span>" +
     '<span class="kv">vs plan A <span class="' + cls + '">' + (dp == null ? "--" : (dp > 0 ? "+" : "") + num(dp, 2) + " places") + "</span></span>" +
@@ -795,7 +828,7 @@ function render(s) {
   if (!s || s.waiting) return;
   s.extra = s.extra || {};
   snap = s;
-  syncTeamSel(s); renderHeader(s); renderQuali(s); renderTower(s); renderFocus(s); renderStrategy(s); renderCharts(s); renderCallbar(s); renderAlerts(s);
+  syncTeamSel(s); renderHeader(s); renderQuali(s); renderTower(s); renderFocus(s); renderStrategy(s); renderCharts(s); renderCallbar(s); renderRisk(s); renderAlerts(s);
   if (s.extra.team_radio) radioList = s.extra.team_radio;
   if (s.extra.positions) onPositions(s.extra.positions);
   renderMap(s); renderConvo(s);

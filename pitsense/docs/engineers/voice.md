@@ -16,7 +16,7 @@ Call + Snapshot --facts.py--> one-line input --backend--> text --guard.py--> ser
 | `synth.py` | corpus: real 2025-26 situations from benchmark rows + sampled calls, targets from the grammar |
 | `tokenizer.py`, `slm.py`, `train.py` | our own byte-level BPE and ~26M-parameter decoder-only transformer, from scratch |
 | `llm.py` | LoRA fine-tune of a pretrained small LLM (SmolLM2-360M-Instruct) on the same corpus |
-| `guard.py` | every number, car number, TLA, compound and lap in the output must be in the input; length; action |
+| `guard.py` | every number, car number, TLA, compound and lap in the output must be in the input, and tied to the right thing (a gap to its driver, ahead / behind, a stop lap to its plan, a tyre to its stop); length; action |
 | `api.py`, `cli.py` | `say`, `brief`, `answer`, `ask`; `pitsense voice train | eval | say` |
 | `tts.py` | `speak(text) -> wav` with Piper (optional) |
 
@@ -26,7 +26,10 @@ The input is one deterministic line, e.g.
 `radio S511140 | ACT BOX | CAR 16 LEC | LAP 21 57 36 | POS 3 | TY MEDIUM 18 1 | FIT HARD | AH 1 VER 1.2 | LOSS 21.5 | REJ 5 | CLF 60 | PA 1 22 HARD | TRG if sc comes before lap 30 | R tyre_cliff 60`.
 The guard rejects an output with any number, three-letter name or compound the line does not
 hold, spelled-out numbers, a length over the limit, or a stated action that is not the call
-(`composer.stated_action`). A rejected output is replaced by the template text; the fallback rate
+(`composer.stated_action`). It also checks relations, not just vocabulary (`guard.relation_errors`): a gap
+stated next to a driver must be that driver's gap, "ahead" / "behind" must match `AH` / `BH`, "box on lap N" must
+be a stop of the plan named (or this lap for a BOX call), and "for X" / "onto X" must be that stop's tyre. So "LEC
+is 2.1 ahead" fails when 2.1 is the gap to the car behind, though every word is in the input. A rejected output is replaced by the template text; the fallback rate
 is reported. `say()` tries the backends best-first (fine-tuned LLM, then scratch model), uses the
 first output that passes the guard, else the template. `Voice(model="llm" | "scratch" | "template")`
 selects one; `PITSENSE_VOICE=template` forces the template.

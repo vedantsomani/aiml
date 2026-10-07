@@ -460,7 +460,6 @@ class MechanicTelemetry(Engineer):
         ups = np.isfinite(dg) & (dg > 0) & valid & (gear >= 2) & (thr >= 50) & (du <= 0.45)
         if ups.any():
             tr.skip.add(u[ups], (dg[ups] >= 2).astype(float))
-        g_prev = g[:-1]
         stable = valid & (gear >= 4) & (dg == 0) & (speed > 150) & (rpm > 3000)
         if stable.any():
             sel = np.flatnonzero(stable)

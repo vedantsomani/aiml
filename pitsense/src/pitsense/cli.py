@@ -66,7 +66,7 @@ def cmd_fetch(a) -> None:
             extra += "  weekend +" + ",".join(r.session_name for r in got)
         if a.radio:
             n, miss = archive.download_radio(ref)
-            extra = f"  radio +{n} mp3 ({miss} missing)"
+            extra += f"  radio +{n} mp3 ({miss} missing)"
         print(f"  {ref.slug}{extra}")
     print(f"{len(refs)} session(s) in {raw_dir()} ({time.time() - t0:.0f} s)")
 

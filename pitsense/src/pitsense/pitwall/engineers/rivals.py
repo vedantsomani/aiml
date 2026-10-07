@@ -228,7 +228,6 @@ class RivalsEngineer(Engineer):
         remaining = (total - d.laps) if total else None
         # rivals that stopped in the last RECENT_LAPS laps, near us in the order at their entry
         ahead_pit = behind_pit = mate_pit = 0
-        pos = d.position or 0
         for k in range(len(state.pit_events) - 1, max(-1, len(state.pit_events) - 40), -1):
             pe = state.pit_events[k]
             if pe.driver == number or pe.under_red or pe.in_lap < d.laps - RECENT_LAPS + 1:

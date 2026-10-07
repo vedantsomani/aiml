@@ -168,7 +168,7 @@ def render(d: dict) -> str:
     r = d["race"]
     title = f"Pre-race briefing: {r.get('year')} {r.get('meeting_name')} - {d['team_name']}"
     a = d["as_of"]
-    sub = (f"PitSense pit wall. Only what was known at lights out"
+    sub = ("PitSense pit wall. Only what was known at lights out"
            + (f" (session clock {a['session_start_t']:.0f} s, {a['events_used']} feed messages read)." if a["cut"] else " (no start marker in the feed: whole feed used)."))
     cars = ", ".join(f"#{c}" for c in d["cars"])
     body = "".join([

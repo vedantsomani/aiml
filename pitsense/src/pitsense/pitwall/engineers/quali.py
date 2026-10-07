@@ -10,7 +10,6 @@ Car values: best_s, rank, gap_to_cut_s, in_zone, p_ko, send, laps_needed, slack_
 
 from __future__ import annotations
 
-import math
 
 from ... import quali as Q
 from ..engineer import Engineer

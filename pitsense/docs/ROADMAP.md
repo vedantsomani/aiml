@@ -5,53 +5,62 @@ Each item names the gap, why it matters on a real pit wall, and how we would mea
 
 ## 1. Data a real team has and we don't (biggest gap)
 
-| Gap | Why it matters | What to do |
+| Gap | Why it matters | Status |
 |---|---|---|
-| **Tyre sets left** (new/used, per compound) | Real plans are limited by sets in the garage; we assume any compound is available | Parse the TyreStintSeries `New` flag plus quali/practice usage into a per-car set inventory; plans may only use sets that exist |
-| **Fuel / energy and car damage** | Teams box for damage and manage energy; we only see lap times | Detect damage from sudden pace loss plus RC "car damage" messages, and add an unscheduled-stop hazard |
-| **Practice long runs** | Teams know each compound's degradation before the race; we learn it during the race | Fit tyre deg on FP2 long runs and use it as the race-start prior |
-| **Pit-crew speed per team** | Stationary time varies by 0.5–1 s between teams | Use per-team stationary-time priors from history (pitstop engineer) |
+| **Tyre sets left** (new/used, per compound) | Real plans are limited by sets in the garage | Done: `engineers/tyresets.py` builds each car's inventory from practice and qualifying; plans only use sets that exist |
+| **Practice long runs** | Teams know each compound's degradation before the race | Done: `practice.py` fits deg on long runs as the race-start prior |
+| **Fuel / energy and car damage** | Teams box for damage and manage energy; we only see lap times | Partly: the mechanics engineers flag power loss and slow cars; no unscheduled-stop hazard in the simulator yet |
+| **Pit-crew speed per team** | Stationary time varies by 0.5-1 s between teams | Open: per-team stationary-time priors from history |
 
 ## 2. Simulator realism
 
-- **More than one SC / VSC per race,** red flags with free tyre changes, and race restarts.
-- **Traffic after the stop:** where a car rejoins and how much time it loses stuck behind slower cars. A stop's real cost depends on this.
-- **Overtaking difficulty per circuit** (Monaco vs Bahrain), learnt from position changes in history.
-- **Rivals that react:** when we stop, the car behind covers. Today rivals follow fixed plans.
-- **Teammates planned together:** stop order, and avoiding double-stack losses.
-- **Wet v2:** crossover laps per circuit and a drying-line model.
+Done: several SC / VSC per race and red flags with free tyre changes (learnt from history), dirty air, passing
+difficulty per circuit, pit loss by track status, a risk setting (`--risk expected|protect|aggressive`), the
+teammate double stack under green flag (`head.double_stack`), and wet races on their own simulator.
+
+Open, by value:
+- **Rivals that react, fully:** the car directly ahead now covers our undercut with its team's learnt cover rate
+  (`analysis.rival_cover`); the rest of the field still follows its own sampled plans. Full reactions need opponent
+  trajectories per candidate plan (today they are shared by every plan).
+- **Teammates fully planned together:** both cars' plans optimised jointly (stop order, split strategies), beyond
+  the double-stack rule.
+- **Wet v2:** crossover laps per circuit, a drying-line model, and the field (positions) in the wet simulator.
 
 Measure: simulated vs actual position change per stop, on 2026 races the model has never seen.
 
-## 3. Decision quality (the question a team actually asks: "did the call help?")
+## 3. Decision quality ("did the call help?")
 
-- Decision value is now in place (simulator counterfactual). Next, run it on every 2026 race and publish per-call value in `reports/results.md`.
-- Calibrate confidence: "80% sure" should be right 80% of the time (reliability plot).
-- Fix the known failure modes from the live Bahrain test:
-  - calls 2–7 laps early;
-  - compound flip-flops;
-  - neutralisations nobody could have predicted, which should become instant reactions.
+Done: decision value (simulator counterfactual, `bench/decision.py`); fair call scoring per action
+(`bench/callscore.py`); calibrated confidence (`pitsense calibrate`: per action, fitted only on earlier races;
+calls carry `confidence` and `confidence_raw`).
+
+Open:
+- The known failure modes from the live Bahrain test: calls 2-7 laps early, compound flip-flops, and
+  neutralisations nobody could predict, which should become instant reactions.
+- Publish per-call decision value for every 2026 race in the reports.
 
 ## 4. Race-day operations
 
-- **Feed failover:** a second live source, plus graceful degradation when the timing feed drops.
-- **Latency budget:** a call within 1 s of the lap finishing (measure p95 on the live recording).
-- **Audit log:** every call with its inputs, so the team can review after the race.
-- **A pit-wall operator role:** accept or reject calls, with the reason fed back for learning.
+Done: the operator role (accept / reject each call with a reason, `POST /api/ack`, graded by `shadow-score`);
+an audit log (every call change with what it changed from and why, every alert, every operator answer); slow work
+off the feed path (voice in its own thread, questions on a copy); replays decide on the live cadence at any speed;
+health alarms; a token from `PITSENSE_TOKEN`.
+
+Open:
+- **Feed failover:** the recorder reconnects after drop-outs and a watchdog restarts it if it dies (backoff 5-60 s,
+  `recorder_restarts` in /api/health); still open: a second, independent live source.
+- **Latency budget:** a call within 1 s of the lap finishing (measure p95 on a live recording).
+- **Learning from the operator:** use rejected calls and their reasons to tune the head (today they are only graded).
 - **Multi-screen setup:** strategist, race engineer and mechanics views.
 
 ## 5. Frontend
 
-Done:
-- replay lab (pause, speed, lap jumps, bookmarks);
-- alarm banner;
-- strategy comparison tab (ranked plans, outcome spread, SC backup plan, first-stop timing).
+Done: replay lab (pause, speed, lap jumps, bookmarks), alarm banner, strategy comparison tab, gap chart, stint
+chart, what-if box (dry and wet tyres), call history, accept / reject and "why it changed" in the call bar.
 
 Next, by value:
-1. **Gap chart:** gap to the cars around us over the last 15 laps, with the pit-loss window drawn as a band (shows the undercut at a glance).
-2. **Stint chart:** every car's stints as coloured bars by compound. It shows who has stopped and who is due.
-3. **"What if" box:** pick a lap and compound, then see the simulated finishing position before calling it.
-4. **Call history:** our calls vs what the team did, colour-coded right or wrong after the fact.
-5. **Pace and degradation chart** per stint for our cars.
-6. **Keyboard shortcuts** and a big-type pit-wall mode for distance reading.
-7. **Phone layout polish:** the strategy tab on small screens.
+1. **Pace and degradation chart** per stint for our cars.
+2. **Keyboard shortcuts** and a big-type pit-wall mode for distance reading.
+3. **Phone layout polish:** the strategy tab on small screens.
+
+(Done: the risk selector in the header.)

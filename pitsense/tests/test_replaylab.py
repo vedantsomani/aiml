@@ -137,6 +137,14 @@ def test_pause_resume():
     assert rt.wait(60) and rt.status == "finished" and rt.n_events > n
 
 
+def test_control_annotation_resolves():
+    from typing import get_type_hints
+
+    from pitsense.pitwall import replay
+
+    assert get_type_hints(ReplaySource.request)["ctl"] is replay.Control
+
+
 def test_speed_validation():
     rt = runtime()
     assert rt.replay_speed(5)["speed"] == 5

@@ -3,13 +3,12 @@ doing now, the slick penalty ``w`` they imply, and the car's own situation."""
 
 from __future__ import annotations
 
-import math
 import zlib
 from statistics import median
 
 import numpy as np
 
-from .wetmodel import CLS, SLICK, W, WetModel, features
+from .wetmodel import SLICK, W, WetModel, features
 from .wetsim import WSET, WetIn, analyse_car as _plan
 
 OBS_LAPS = 3  # laps looked back for the field's pace by tyre class

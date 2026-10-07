@@ -171,7 +171,6 @@ def evaluate(model: WetModel, I: WetIn, w: np.ndarray, plans: list[tuple]) -> np
         tot = np.zeros(S)
         cls, k0, init = I.c0, 0, w_init
         pit_s = 0.0
-        pen = np.zeros(S)
         for o, c in plan:
             tot += seg(cls, k0, o + 1, init)  # the in-lap is on the old tyre
             loss = (I.loss_now if o == 0 else I.loss_green) + WSET["stop_extra_s"]

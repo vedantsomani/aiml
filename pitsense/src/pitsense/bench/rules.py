@@ -40,7 +40,6 @@ def measure(years=(2025, 2026)) -> dict:
     cov: Counter = Counter()
     unknown: Counter = Counter()
     sc_leads, vsc_leads, sc_deploy_lag = [], [], []
-    rows = []
     for ref in _races(years):
         st = _final_state(ref)
         for m in st.rc:
@@ -133,7 +132,6 @@ def _md(df: pd.DataFrame) -> str:
 
 
 def cmd_rules_report(a) -> None:
-    from ..config import bench_dir
 
     years = tuple(a.year)
     text = report(years)

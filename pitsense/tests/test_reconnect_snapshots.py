@@ -3,10 +3,7 @@
 Reconnect snapshots send the entire state back; we must not duplicate lap records or pit events.
 """
 
-import json
-from pathlib import Path
 
-import pytest
 
 from pitsense.events import Event, EventLog
 from pitsense.state import replay

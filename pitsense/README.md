@@ -12,11 +12,11 @@ A virtual F1 pit wall that runs on the public timing feed. It has one engineer p
 | Weather | rain in the next 10 minutes, slick / intermediate crossover | [weather](docs/engineers/weather.md) |
 | Models | cross-race models served live, identical to the benchmark | [models](docs/models.md) |
 | Strategy & head | Monte Carlo race simulation, Plan A / B, BOX / STAY OUT calls with reasons | [strategy](docs/engineers/strategy.md) |
-| Voice | fine-tuned SmolLM2 plus our own small model: radio calls and briefs, fact-checked, spoken by Piper |
+| Voice | fine-tuned SmolLM2 plus our own small model: radio calls and briefs, fact-checked, spoken by Piper | [voice](docs/engineers/voice.md) |
 | Mechanics | telemetry, radio and chief mechanic: power loss, slowdowns, problem reports | [mechanics](docs/engineers/mechanics.md) |
 | Safety car | calibrated SC / VSC probability for the next 2 laps, "safety car likely" alert | [safetycar](docs/engineers/safetycar.md) |
 | Rival radio | other teams' radio as alerts: "box box", "Plan B", "tyres are gone" | [rivalradio](docs/engineers/rivalradio.md) |
-| Weekend | tyre sets left from FP/quali; qualifying pit wall (cut line, send-now calls) | [weekend](docs/engineers/weekend.md) | [voice](docs/engineers/voice.md) |
+| Weekend | tyre sets left from FP/quali; qualifying pit wall (cut line, send-now calls) | [weekend](docs/engineers/weekend.md) |
 
 ```bash
 pitsense pitwall --year 2026 --race hungary --speed 20 --team ferrari   # replay with the dashboard
@@ -25,9 +25,11 @@ pitsense pitwall --live --team ferrari --host 0.0.0.0 --token secret    # also o
 pitsense pitwall --year 2026 --race hungary --session qualifying        # qualifying pit wall
 pitsense briefing --year 2026 --race bahrain --team ferrari             # pre-race strategy briefing (HTML)
 pitsense report --year 2026 --race bahrain --team ferrari               # post-race report: every call graded
+pitsense pitwall --year 2026 --race hungary --team ferrari --risk protect   # rank plans by their downside
+pitsense calibrate                                                       # refit calibrated call confidence (as-of)
 ```
 
-The dashboard shows the timing tower, a live track map, your team's calls with Plan A/B, and a radio conversation panel. In that panel, real driver radio is transcribed by Whisper, and the pit wall's calls are written by the fine-tuned voice model and spoken by Piper. Type or hold-to-talk questions such as "what if we box now?" or "what if the safety car comes next lap?"; the race simulator answers them.
+The dashboard shows the timing tower, a live track map, your team's calls with Plan A/B, and a radio conversation panel. In that panel, real driver radio is transcribed by Whisper, and the pit wall's calls are written by the fine-tuned voice model and spoken by Piper. Type or hold-to-talk questions such as "what if we box now?", "what if the safety car comes next lap?" or "box now for inters?"; the race simulator answers them (the wet simulator when it is wet). Each call can be accepted or rejected with a reason, shows what it changed from and why, and carries a confidence calibrated on earlier races; `pitsense shadow-score` grades the calls and the operator's answers after the race.
 
 How a team uses it from day one: [docs/pitwall.md](docs/pitwall.md). How it is built, and the rules every engineer follows: [docs/ENGINEERING.md](docs/ENGINEERING.md).
 

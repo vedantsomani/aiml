@@ -8,7 +8,6 @@ import numpy as np
 import pytest
 
 from pitsense.asof import LeakageError
-from pitsense.events import Event, EventLog
 from pitsense.feeds import RadioStore
 from pitsense.pitloss import PitLossPrior
 from pitsense.pitwall import Context, PitWall

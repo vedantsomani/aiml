@@ -29,7 +29,6 @@ with up to 3, same lap), ``n_old`` the cars it rests on.
 
 from __future__ import annotations
 
-import math
 from statistics import median
 
 import numpy as np

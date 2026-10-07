@@ -49,7 +49,21 @@ pit lane, must-stop, penalty, tyre cliff, undercut threat/chance, the numbers be
 expected finish, rain. Weather keys are read with `.get()`; missing values change nothing.
 
 Refresh and determinism: a car's plan is recomputed when it completes a lap, the track status or pit lane
-changes, or its `must_stop` / penalty changes; otherwise the cached plan stands. The random numbers are drawn for
+changes, its `must_stop` / penalty changes, its tyres change (compound, stops made, stint: the feed can confirm a
+stop a few laps late), the coarse weather state changes (rain flag, wet running, crossover, race still dry) or the
+team's risk setting changes; otherwise the cached plan stands.
+
+Risk (`--risk`, `TeamConfig.risk`): plans are ranked on the mean utility (`expected`, default), on the mean of the
+worst quarter of futures (`protect`: keep the downside small) or of the best quarter (`aggressive`: chase the
+upside); `analysis.risk_score`. The per-simulation utilities, and so the now-vs-later confidence, stay risk-neutral.
+
+Teammates: when both cars of a team are called to BOX on the same lap under green flag, the car behind is told to
+box next lap (PREPARE_BOX) unless the simulator says waiting costs it half a place or more
+(`head.double_stack`, queue cost ~3 s); under SC / VSC both box and the second car's reasons give the queue cost.
+Rivals that react: in a future where our stop, two or more laps before the car ahead's own, puts us ahead of it,
+that car covers with its team's learnt cover rate (rivals engineer, `team_cover_rate`) and stays ahead
+(`analysis.rival_cover`, `SETTINGS["rival_cover"]`; seeded, the same draw for every plan). The rest of the field
+follows its own sampled plans. The random numbers are drawn for
 every driver slot and every race lap from a seed of (race, kind), then cut to the laps still to run, so lap after
 lap the same futures are used and calls move on evidence, not noise. The head's hysteresis is the one place a call
 depends on the call before it (live: the previous lap's target).

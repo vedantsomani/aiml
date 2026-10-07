@@ -7,7 +7,7 @@ import dataclasses
 import pytest
 
 from pitsense.voice import composer, guard
-from pitsense.voice.facts import Facts, Neighbour, PlanF
+from pitsense.voice.facts import Facts
 
 from .test_voice import BASE, _call, _snapshot
 
