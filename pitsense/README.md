@@ -71,7 +71,7 @@ pitsense fetch --year 2026 --race japan --telemetry      # timing + CarData/Posi
 pitsense standings --year 2026                           # season results for the championship panel
 pitsense serve --year 2026 --race japan --speed 8 --team ferrari
 # open http://127.0.0.1:8765/  (tabs: Tower, Map, Radio, Team, Strategy, Alerts, Season, Analysis)
-pitsense record --out data\liveace.jsonl              # live: record (all topics; --topics to restrict) ...
+pitsense record --out data\live\race.jsonl              # live: record (all topics; --topics to restrict) ...
 pitsense pitwall --live --team ferrari                   # ... or record and follow in one go
 ```
 
