@@ -276,7 +276,15 @@ def cmd_record(a) -> None:
     print(f"Recording to {out} for up to {a.minutes:.0f} min. Ctrl+C to stop.")
     if not a.no_auth:
         print("You'll be asked to sign in with your F1 TV account in the browser the first time.")
-    n = record(out, minutes=a.minutes, no_auth=a.no_auth)
+    from .live import select_topics
+
+    try:
+        topics = select_topics(a.topics)
+    except ValueError as exc:
+        sys.exit(str(exc))
+    if a.topics:
+        print(f"Topics: {', '.join(topics)}")
+    n = record(out, minutes=a.minutes, no_auth=a.no_auth, topics=topics)
     print(f"Saved {n} messages. Replay it with: pitsense replay --file {out}")
 
 
@@ -354,6 +362,8 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--out", required=True)
     s.add_argument("--minutes", type=float, default=180)
     s.add_argument("--no-auth", action="store_true", help="skip F1 TV sign-in (partial data)")
+    s.add_argument("--topics", nargs="+", help="record only these topics (the timing core is always kept); "
+                   "default: every topic, including WeatherData, CarData.z and Position.z")
     s.set_defaults(fn=cmd_record)
 
     s = sub.add_parser("import-live", help="convert a recording into a PitSense event log")

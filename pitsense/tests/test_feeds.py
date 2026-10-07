@@ -164,3 +164,42 @@ def test_state_clock_drives_default_queries_and_transcript_latency(tmp_path):
     st.apply(Event(20.0, "SessionStatus", {"Status": "Started"}, 1))
     assert st.feeds.radio.messages("1")[0].text is None  # 10 s after the message: not known yet
     assert st.feeds.radio.messages("1")[0].known_at == 25.0
+
+
+def _stream(scramble_after: float | None = None) -> list[Event]:
+    """Weather, CarData and Position messages every 2 s; with ``scramble_after``, every value published later is changed."""
+    evs, i = [Event(0.0, "SessionStatus", {"Status": "Started"}, 0)], 1
+    for k in range(1, 30):
+        t = 2.0 * k
+        bad = scramble_after is not None and t > scramble_after
+        f = 7.0 if bad else 1.0
+        evs.append(Event(t, "WeatherData", {"AirTemp": str(20 + k * f), "TrackTemp": str(30 + k), "Humidity": "50",
+                                             "Pressure": "1010", "WindSpeed": str(k * f), "WindDirection": "90",
+                                             "Rainfall": "1" if bad else "0"}, i))
+        evs.append(Event(t, "CarData.z", pack(car_data([(t - 1.0, {"1": int(200 + k * f), "4": 150})])), i + 1))
+        evs.append(Event(t, "Position.z", pack(positions([(t - 0.5, {"1": (k * f, -k), "4": (k, k * f)})])), i + 2))
+        i += 3
+    return evs
+
+
+def test_scrambling_the_future_leaves_every_feed_up_to_t_bit_identical():
+    cut = 31.0
+    clean, dirty = RaceState(), RaceState()
+    for e in _stream():
+        if e.t <= cut:
+            clean.apply(e)
+    for e in _stream(scramble_after=cut):
+        dirty.apply(e)  # the future is applied, and corrupted
+    upto = RaceState()  # weather is the latest message: the corrupted log replayed to the cut gives the same state
+    for e in _stream(scramble_after=cut):
+        if e.t <= cut:
+            upto.apply(e)
+    assert upto.weather == clean.weather and clean.weather["AirTemp"] == 35.0 and upto.fingerprint() == clean.fingerprint()
+    last = 30.0  # the newest message at or before the cut
+    for car in ("1", "4"):
+        a = clean.feeds.telemetry.telemetry(car, None, t=last)
+        b = dirty.feeds.telemetry.telemetry(car, None, t=last)
+        assert all(np.array_equal(a[k], b[k], equal_nan=True) for k in a)  # bit-identical as of the cut
+    assert clean.feeds.telemetry.latest_position(t=last) == dirty.feeds.telemetry.latest_position(t=last)
+    with pytest.raises(LeakageError):
+        clean.feeds.telemetry.telemetry("1", None, t=cut + 5)  # nothing past the last message can be asked for

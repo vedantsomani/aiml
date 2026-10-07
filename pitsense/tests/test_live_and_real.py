@@ -88,3 +88,15 @@ def test_recorder_stops_at_deadline_even_while_data_flows(tmp_path):
     client._supervise()
     stop.set()
     assert 1.0 < time.time() - t0 < 4.0
+
+
+def test_record_topics_keep_the_timing_core_and_reject_unknown_names():
+    import pytest
+
+    from pitsense.live import CORE_TOPICS, TOPICS, select_topics
+
+    assert select_topics(None) == TOPICS and {"WeatherData", "CarData.z", "Position.z"} <= set(TOPICS)
+    got = select_topics(["WeatherData"])
+    assert "WeatherData" in got and set(CORE_TOPICS) <= set(got) and "CarData.z" not in got
+    with pytest.raises(ValueError):
+        select_topics(["NoSuchTopic"])

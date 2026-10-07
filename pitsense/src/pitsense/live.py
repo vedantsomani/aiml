@@ -52,14 +52,14 @@ def feed_radio(radio, topic: str, data) -> None:
                 radio.submit(c.get("Path"))
 
 
-def _make_client(out: Path, *, no_auth: bool, timeout: int, deadline: float | None = None, radio=None):
+def _make_client(out: Path, *, no_auth: bool, timeout: int, deadline: float | None = None, radio=None, topics=None):
     from fastf1.livetiming.client import SignalRClient  # optional dependency
     from signalrcore.messages.completion_message import CompletionMessage
 
     class JsonlClient(SignalRClient):
         def __init__(self) -> None:
             super().__init__(str(out), filemode="a", timeout=timeout, no_auth=no_auth)
-            self.topics = list(TOPICS)
+            self.topics = list(topics or TOPICS)
             self.n_messages = 0
             self.interrupted = False
             self.deadline = deadline
@@ -164,7 +164,24 @@ def _cleanup(client) -> None:
         f.close()
 
 
-def record(out: Path, *, minutes: float = 180.0, no_auth: bool = False, idle_timeout: int = 120, radio=None) -> int:
+# what the timing state cannot do without (``record --topics`` always keeps these)
+CORE_TOPICS = ("Heartbeat", "SessionInfo", "SessionStatus", "DriverList", "LapCount", "TrackStatus", "TimingData",
+               "TimingAppData")
+
+
+def select_topics(wanted: list[str] | None) -> list[str]:
+    """``record --topics``: the requested topics plus the core ones, in recorder order. Unknown names are an error."""
+    if not wanted:
+        return list(TOPICS)
+    bad = sorted(set(wanted) - set(TOPICS))
+    if bad:
+        raise ValueError(f"unknown topic(s) {bad}; known: {', '.join(TOPICS)}")
+    keep = set(wanted) | set(CORE_TOPICS)
+    return [t for t in TOPICS if t in keep]
+
+
+def record(out: Path, *, minutes: float = 180.0, no_auth: bool = False, idle_timeout: int = 120, radio=None,
+           topics: list[str] | None = None) -> int:
     """Record until ``minutes`` have passed, reconnecting after drop-outs. Returns message count.
 
     Team-radio clips are downloaded (and transcribed) in background threads into
@@ -179,7 +196,8 @@ def record(out: Path, *, minutes: float = 180.0, no_auth: bool = False, idle_tim
     total = 0
     log = logging.getLogger("pitsense.record")
     while time.time() < deadline:
-        client = _make_client(out, no_auth=no_auth, timeout=idle_timeout, deadline=deadline, radio=radio)
+        client = _make_client(out, no_auth=no_auth, timeout=idle_timeout, deadline=deadline, radio=radio,
+                              topics=select_topics(topics))
         try:
             client.start()  # blocks until idle timeout or Ctrl+C
         except KeyboardInterrupt:
