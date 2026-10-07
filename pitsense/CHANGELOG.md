@@ -75,3 +75,7 @@ Decisions for the viewer spec (simplest option that keeps replay == live and lea
   order driven, not by the circuit's official turn numbers.
 - Checked on Suzuka 2026 (NOR's best lap against PIA's): -0.89 s on the distance grid against -0.62 s by lap times
   (telemetry is sampled at about 4 Hz).
+
+### Fix
+- Dashboard replays now load CarData too (`commands.load_with_feeds`, about 2 s for a race), so the driver card,
+  speed trace and coach work on replays, not only on live recordings.

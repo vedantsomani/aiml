@@ -51,9 +51,8 @@ def build_source(a) -> Source:
 
 
 def load_with_feeds(session_dir: Path) -> _events.EventLog:
-    """Timing, positions and radio (not CarData: the dashboard does not use telemetry channels)."""
-    files = Path(session_dir).glob("*.jsonStream")
-    return _events.load_archive_session(session_dir, tuple(f.stem for f in files if f.stem != "CarData.z"))
+    """Timing and every feed downloaded: positions, radio and CarData (driver card, speed trace, coach)."""
+    return _events.load_archive_session(session_dir, feeds=True)
 
 
 def _lan_ip() -> str:
