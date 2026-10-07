@@ -223,3 +223,9 @@ main>*,aside>*{min-width:0}
 .drv .bar { height: 8px; background: var(--line); border-radius: 4px; margin: 4px 0; overflow: hidden; }
 .drv .bar i { display: block; height: 100%; }
 .drv .thr i { background: #3cb45a; } .drv .brk i { background: #e04848; }
+
+/* map overlays: rejoin ghost and undercut threat */
+.over .ghost { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 4 3; }
+.over .ghostlab { fill: var(--accent); font-size: 11px; }
+.over .threat { stroke: #ff6b6b; stroke-width: 2.5; stroke-dasharray: 6 4; }
+.ovt { float: right; font-size: .75em; font-weight: normal; }

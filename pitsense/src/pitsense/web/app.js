@@ -463,7 +463,7 @@ function buildMap(s) {
   MAP.key = key;
   svg.innerHTML = "";
   MAP.cars = {}; MAP.last = null;
-  MAP.layers = {track: el("g", {}, svg), cars: el("g", {}, svg)};
+  MAP.layers = {track: el("g", {}, svg), over: el("g", {class: "over"}, svg), cars: el("g", {}, svg)};
   if (!tr || !tr.x || tr.x.length < 10) {
     MAP.rot = null; MAP.box = null; MAP.trail = {};
     $("mapnote").textContent = "no outline for this circuit yet: drawing the cars' trails";
@@ -543,7 +543,34 @@ function frame(now) {
     c.g.setAttribute("transform", "translate(" + c.x.toFixed(0) + " " + c.y.toFixed(0) + ")");
     if (f < 1) moving = true;
   }
+  drawOverlays();
   if (moving && !document.hidden) requestAnimationFrame(frame); else MAP.anim = false;
+}
+// PitSense overlays: where a car would rejoin if it boxed now (ghost ring at the car it would come out behind),
+// and undercut threats (a line from the car behind to the car it threatens), for our cars or every car
+function drawOverlays() {
+  const g = MAP.layers && MAP.layers.over;
+  if (!g || !snap) return;
+  g.innerHTML = "";
+  const all = $("ovall") && $("ovall").checked, mine = focusSet(), cars = snap.cars || {}, byPos = {};
+  for (const r of snap.tower || []) if (r.running && r.position) byPos[r.position] = r.car;
+  for (const r of snap.tower || []) {
+    const n = r.car, me = MAP.cars[n], v = cars[n] || {};
+    if (!me || me.x == null || !r.running || !(all || mine.has(n))) continue;
+    const rj = v.pitstop__rejoin_if_box_now;
+    if (rj != null && r.position != null && Math.round(rj) !== r.position) {
+      const p = Math.round(rj), host = MAP.cars[byPos[p > r.position ? p : p - 1]];
+      if (host && host.x != null) {
+        el("circle", {cx: host.x.toFixed(0), cy: host.y.toFixed(0), r: 13, class: "ghost"}, g);
+        el("text", {x: (host.x + 15).toFixed(0), y: (host.y - 10).toFixed(0), class: "ghostlab"}, g).textContent = (r.tla || n) + " P" + p;
+      }
+    }
+    const th = v.rivals__undercut_threat, b = MAP.cars[v.rivals__behind];
+    if (th != null && th >= 0.35 && b && b.x != null) {
+      el("line", {x1: b.x.toFixed(0), y1: b.y.toFixed(0), x2: me.x.toFixed(0), y2: me.y.toFixed(0), class: "threat",
+                  "stroke-opacity": Math.min(1, 0.3 + th).toFixed(2)}, g);
+    }
+  }
 }
 // fallback when there is no outline: the trail every car leaves
 function trailUpdate(cars) {
@@ -585,6 +612,7 @@ function showTip(e) {
 function renderMap(s) {
   buildMap(s);
   applyFocus();
+  drawOverlays();
   if (MAP.hover) { /* keep the tooltip's numbers current */ const c = MAP.cars[MAP.hover]; if (c) { const r = c.g.getBoundingClientRect(); showTip({clientX: r.left, clientY: r.top}); } }
 }
 window.addEventListener("resize", scaleMap);
@@ -983,3 +1011,4 @@ $("timeline").addEventListener("click", (e) => {
   }
 });
 pollReplay(); setInterval(pollReplay, 4000);
+$("ovall").addEventListener("change", drawOverlays);

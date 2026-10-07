@@ -41,3 +41,12 @@ Decisions for the viewer spec (simplest option that keeps replay == live and lea
   it started. Simplification: the feed's final order, so penalties given after the session are not reflected.
 - New: **Driver** card (Team tab): speed, gear, throttle and brake bars and DRS for our cars, from the newest CarData
   sample, updated about 3 times a second.
+
+### Phase 4: PitSense overlays
+- Already in place: pit probability within 1 / 3 laps in the tower with heat colouring (cross-race models, else the
+  rivals engineer); rejoin position if boxing now; every call change logged to a timestamped JSONL with session and
+  wall-clock time (pre-registered, scored by `shadow-score` and `bench/callscore.py`).
+- New on the track map: a **rejoin ghost** (dashed ring at the car it would come out behind, labelled with the
+  predicted position) and **undercut threat lines** (car behind -> threatened car when `rivals__undercut_threat`
+  >= 0.35), for our cars or, with "all cars", the whole field.
+- The snapshot's `predictions` block (Phase 2) carries the numbers behind them with `as_of` and the model bundle.
