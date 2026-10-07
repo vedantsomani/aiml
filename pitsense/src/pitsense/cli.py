@@ -215,12 +215,15 @@ def cmd_bench_build(a) -> None:
     from .config import bench_dir
 
     refs = _races(a.year, None)
-    for ref in refs:
-        archive.download_session(ref)
+    if not a.history_only:
+        for ref in refs:
+            archive.download_session(ref)
     t0 = time.time()
     summaries = list(_map(_summarize, refs, a.jobs))
     H.save(summaries, bench_dir() / "history.json")
     print(f"history: {len(summaries)} races ({time.time() - t0:.0f} s)")
+    if a.history_only:  # refresh what engineers learnt from past races (after an engineer's summarize_race changed)
+        return
     t0 = time.time()
     for path in _map(_build, refs, a.jobs):
         print(f"  {Path(path).name}")
@@ -336,6 +339,8 @@ def main(argv: list[str] | None = None) -> None:
     s = bsub.add_parser("build", help="frozen decision points + labels for every race")
     s.add_argument("--year", type=int, nargs="+", default=[2025, 2026])
     s.add_argument("--jobs", type=int, default=DEFAULT_JOBS)
+    s.add_argument("--history-only", action="store_true",
+                   help="only rebuild data/bench/history.json from local races (pass every year it should hold)")
     s.set_defaults(fn=cmd_bench_build)
     s = bsub.add_parser("run", help="expanding-window evaluation and leaderboard")
     s.add_argument("--test-year", type=int, default=2026)
