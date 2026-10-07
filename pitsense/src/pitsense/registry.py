@@ -74,6 +74,7 @@ COMMANDS: list[str] = [
     "pitsense.bench.safetycar:add_commands",
     "pitsense.bench.strategy:add_commands",
     "pitsense.calibration:add_commands",
+    "pitsense.standings:add_commands",
     "pitsense.voice.cli:add_commands",
     "pitsense.trackmap:add_commands",
     "pitsense.radio:add_commands",

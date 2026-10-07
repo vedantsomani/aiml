@@ -130,7 +130,8 @@ main>*,aside>*{min-width:0}
   aside{display:block}
   .panel[data-tab]{display:none}
   body.tab-tower .panel[data-tab="tower"],body.tab-map .panel[data-tab="map"],body.tab-radio .panel[data-tab="radio"],
-  body.tab-team .panel[data-tab="team"],body.tab-strategy .panel[data-tab="strategy"],body.tab-alerts .panel[data-tab="alerts"]{display:block}
+  body.tab-team .panel[data-tab="team"],body.tab-strategy .panel[data-tab="strategy"],body.tab-alerts .panel[data-tab="alerts"],
+  body.tab-season .panel[data-tab="season"],body.tab-analysis .panel[data-tab="analysis"]{display:block}
   body.tab-tower #qpanel[hidden]{display:none}
   .tower{overflow-x:hidden}
   th.x,td.x{display:none}
@@ -213,3 +214,12 @@ main>*,aside>*{min-width:0}
 .ack.accept { background: rgba(60, 180, 90, .25); }
 .ack.reject { background: rgba(220, 60, 60, .25); }
 .cb .chg { display: block; opacity: .7; font-size: .75em; max-width: 26em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* championship and driver card */
+.champ td.up { color: var(--accent); } .champ td.down { color: #ff6b6b; }
+.drv { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.drv .card { border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+.drv .big { font-size: 1.6em; font-variant-numeric: tabular-nums; }
+.drv .bar { height: 8px; background: var(--line); border-radius: 4px; margin: 4px 0; overflow: hidden; }
+.drv .bar i { display: block; height: 100%; }
+.drv .thr i { background: #3cb45a; } .drv .brk i { background: #e04848; }

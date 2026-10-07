@@ -29,3 +29,15 @@ Decisions for the viewer spec (simplest option that keeps replay == live and lea
 - New test: a recording followed as live and the same recording replayed make identical calls.
 - Kept as is (simplest option): server-sent events instead of a WebSocket (controls are POSTs), snapshots every 3 s
   of session time plus every leader lap with positions and telemetry at ~3 Hz, instead of a fixed 4 Hz snapshot.
+
+### Phase 3: viewer screens
+- Already in place (dashboard, `web/`): track map with team-coloured cars, driver codes, interpolation and the
+  selected car highlighted; timing tower (position, gap, interval, compound and age, last lap, pit); header with lap,
+  clock and coloured flag; weather; replay bar (play / pause, speed, lap jumps, live / replay); dark, responsive.
+- New: **Championship** panel (Season tab): drivers' standings before this race, the race's points if it finished
+  in the current order, projected total and places moved. Points are data-driven by era (`standings.POINTS`: no
+  fastest-lap point from 2025, sprint points by year). Results come from each finished session's own feed
+  (`pitsense standings --year Y` -> `data/bench/results_<year>.json`); a race sees only sessions that ended before
+  it started. Simplification: the feed's final order, so penalties given after the session are not reflected.
+- New: **Driver** card (Team tab): speed, gear, throttle and brake bars and DRS for our cars, from the newest CarData
+  sample, updated about 3 times a second.

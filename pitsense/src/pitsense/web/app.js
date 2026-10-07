@@ -831,7 +831,35 @@ function render(s) {
   syncTeamSel(s); renderHeader(s); renderQuali(s); renderTower(s); renderFocus(s); renderStrategy(s); renderCharts(s); renderCallbar(s); renderRisk(s); renderAlerts(s);
   if (s.extra.team_radio) radioList = s.extra.team_radio;
   if (s.extra.positions) onPositions(s.extra.positions);
-  renderMap(s); renderConvo(s);
+  renderMap(s); renderConvo(s); renderChamp(s);
+  if (s.extra.telemetry) renderDriver(s.extra.telemetry);
+}
+
+// championship: points before this race, the race's points in the current order, projected total and places moved
+function renderChamp(s) {
+  const c = s.extra.championship;
+  if (!c) { $("champ").innerHTML = '<div class="empty">No season results cached: run <code>pitsense standings --year ' + esc(String(new Date().getFullYear())) + "</code>.</div>"; return; }
+  const mine = new Set([...focusSet()].map((n) => ((s.tower || []).find((r) => r.car === n) || {}).tla));
+  $("champ").innerHTML = '<table class="champ"><thead><tr><th>P</th><th>driver</th><th>before</th><th>race</th><th>total</th><th></th></tr></thead><tbody>' +
+    c.slice(0, 22).map((r) => "<tr" + (mine.has(r.tla) ? ' class="mine"' : "") + "><td>" + r.rank + "</td><td><b>" + esc(r.tla) + "</b> <small>" + esc(r.team || "") +
+      "</small></td><td>" + r.points + "</td><td>" + (r.race ? "+" + r.race : "") + "</td><td><b>" + r.projected + "</b></td><td class=\"" +
+      (r.delta > 0 ? "up" : r.delta < 0 ? "down" : "") + "\">" + (r.delta ? (r.delta > 0 ? "&#9650;" : "&#9660;") + Math.abs(r.delta) : "") + "</td></tr>").join("") + "</tbody></table>";
+}
+
+// driver card: speed, gear, throttle and brake of our cars, from the newest published CarData sample
+function renderDriver(tel) {
+  const mine = [...focusSet()].slice(0, 4), tla = {};
+  for (const r of (snap && snap.tower) || []) tla[r.car] = r.tla;
+  if (!mine.length) { $("drivercard").innerHTML = '<div class="empty">Pick a team or pin a car.</div>'; return; }
+  $("drivercard").innerHTML = mine.map((n) => {
+    const v = tel[n];
+    if (!v) return '<div class="card"><b>' + esc(tla[n] || n) + '</b> <span class="dim">no telemetry (record or fetch with CarData.z)</span></div>';
+    const [spd, gear, thr, brk, drs] = v;
+    return '<div class="card"><b>' + esc(tla[n] || n) + '</b>' + (drs >= 10 ? ' <span class="ack accept">DRS</span>' : "") +
+      '<div><span class="big">' + num(spd, 0) + '</span> km/h &middot; gear <span class="big">' + num(gear, 0) + "</span></div>" +
+      '<div class="bar thr" title="throttle"><i style="width:' + Math.max(0, Math.min(100, thr || 0)) + '%"></i></div>' +
+      '<div class="bar brk" title="brake"><i style="width:' + (brk ? 100 : 0) + '%"></i></div></div>';
+  }).join("");
 }
 
 document.querySelector("#tower tbody").addEventListener("click", (e) => {
@@ -857,6 +885,7 @@ if (window.EventSource) {
     const m = JSON.parse(e.data);
     if (m.team_radio) { radioList = m.team_radio; if (snap) renderConvo(snap); }
     onPositions(m);
+    if (m.telemetry) renderDriver(m.telemetry);
   });
   es.addEventListener("status", (e) => { if (JSON.parse(e.data).status === "finished") conn(true, "feed ended"); });
 } else poll();

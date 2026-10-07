@@ -735,6 +735,25 @@ class PitWallRuntime:
                 "track": self.track, "team_radio": self._team_radio(True), "telemetry": self._telemetry(),
                 "wall_msgs": list(self.wall_msgs)}
 
+    def _championship(self, state: RaceState) -> list | None:
+        """Drivers' standings before this race (sessions that ended before it started) and if it finished in the
+        current running order. None without cached results (``pitsense standings --year Y``) or outside a race."""
+        if self._wall_quali or self.source.start_utc is None:
+            return None
+        if not hasattr(self, "_standings"):
+            from .. import standings as ST
+
+            start = self.source.start_utc
+            res = ST.load(start.year)
+            self._standings = (ST.season_points(ST.before(res, start), start.year), start.year) if res else None
+        if self._standings is None:
+            return None
+        from ..standings import project
+
+        pts, year = self._standings
+        order = [(d.tla, d.team) for d in state.running_order() if d.tla and not d.retired]
+        return project(pts, order, year)
+
     def _telemetry(self) -> dict:
         """Newest published CarData sample of every car: {car: [speed, gear, throttle, brake, drs, rpm]} (as-of)."""
         try:
@@ -799,6 +818,7 @@ class PitWallRuntime:
             "track_status_since": round(state.track_status_since, 1),
             "team": self.team.team, "wall_time": time.time(),
             "changes": dict(self.changes), "acks": dict(self.acks), "risk": self.team.risk,
+            "championship": self._championship(state),
         }
 
     def _log_changes(self, state: RaceState, d: dict, snap: Snapshot | None = None) -> None:

@@ -35,7 +35,7 @@
 </div>
 <div id="callbar" class="callbar" aria-live="polite"></div>
 <nav id="tabs" class="tabs" aria-label="sections">
-  <button data-tab="tower" class="on">Tower</button><button data-tab="map">Map</button><button data-tab="radio">Radio</button><button data-tab="team">Team</button><button data-tab="strategy">Strategy</button><button data-tab="alerts">Alerts</button>
+  <button data-tab="tower" class="on">Tower</button><button data-tab="map">Map</button><button data-tab="radio">Radio</button><button data-tab="team">Team</button><button data-tab="strategy">Strategy</button><button data-tab="alerts">Alerts</button><button data-tab="season">Season</button><button data-tab="analysis">Analysis</button>
 </nav>
 <div id="warn" class="warn" hidden></div>
 <main>
@@ -76,6 +76,8 @@
     <section class="panel" data-tab="strategy"><h2>Stints <small>every car &middot; line = current lap</small></h2><div id="stintchart"></div></section>
     <section class="panel" data-tab="strategy"><h2>Call history <small>our calls on a lap axis</small></h2><div id="callhist"></div></section>
     <section class="panel" data-tab="team"><h2>Our cars <small id="focusnote"></small></h2><div id="focus"></div></section>
+    <section class="panel" data-tab="team"><h2>Driver <small>live telemetry of our cars</small></h2><div id="drivercard" class="drv"></div></section>
+    <section class="panel" data-tab="season"><h2>Championship <small>before this race, and if it finished in the current order</small></h2><div id="champ"></div></section>
     <section class="panel" data-tab="alerts"><h2>Alerts</h2><div id="alerts"></div></section>
     <section class="panel" data-tab="alerts"><h2>Race control</h2><div id="rc"></div></section>
   </aside>
